@@ -1,0 +1,68 @@
+import json
+from datetime import datetime
+import pandas as pd
+import os
+import pytest
+
+# Simple app import
+import app as flask_app
+
+@pytest.fixture
+def client():
+    flask_app.app.config['TESTING'] = True
+    with flask_app.app.test_client() as c:
+        # Simulate login session
+        with c.session_transaction() as sess:
+            sess['user'] = 'demo@example.com'
+        yield c
+
+def test_predict_mood_basic(client):
+    payload = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "Temperature": 70.0,
+        "Humidity": 45.0,
+        "MQ-2": "OK",
+        "BH1750FVI": 250.0,
+        "Radar": 1,
+        "Ultrasonic": 60.0,
+        "song": 1
+    }
+    resp = client.post('/api/predict_mood', json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert 'predicted_mood' in data
+    assert isinstance(data['predicted_mood'], int)
+
+
+def test_predict_mood_invalid(client):
+    resp = client.post('/api/predict_mood', json={"Temperature": 70})
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert 'error' in data
+
+
+def test_dashboard_data(client, monkeypatch):
+    # Monkeypatch loader to supply deterministic dataframe
+    import app as a
+    import pandas as pd
+    from datetime import datetime, timedelta
+    now = datetime.utcnow()
+    df = pd.DataFrame({
+        'timestamp': [now.isoformat(), (now - timedelta(days=1)).isoformat()],
+        'Temperature': [70, 72],
+        'Humidity': [40, 42],
+        'MQ-2': ['OK','OK'],
+        'BH1750FVI': [200, 250],
+        'Radar': [1,0],
+        'Ultrasonic': [50,55],
+        'mood':[3,4],
+        'song':[1,2]
+    })
+    def fake_loader(): return df
+    monkeypatch.setattr(a, '_load_sensor_dataframe', fake_loader)
+    # Invalidate cache by calling cached aggregates with new marker
+    resp = client.get('/api/dashboard_data')
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert 'summary' in data
+    assert 'donutSlices' in data

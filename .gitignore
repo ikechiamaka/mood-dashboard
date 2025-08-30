@@ -1,0 +1,52 @@
+# Python bytecode / cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment & secrets
+.env
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Distribution / build
+build/
+dist/
+*.egg-info/
+
+# Jupyter / exploratory
+.ipynb_checkpoints/
+
+# IDE / editor
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs
+*.log
+
+# Data outputs (keep raw sensor schema but ignore user-generated logs)
+data/journal.csv
+data/checkins.csv
+
+# Model artifacts (uncomment to ignore if you don't want them in repo)
+# mood_model.pkl
+# optimized_mood_predictor.pkl
+
+# Images generated during analysis
+*.png
+*.svg
+
+# Mac / OS noise
+.DS_Store
+Thumbs.db
