@@ -8,3 +8,4 @@ joblib>=1.2.0
 openai>=1.0.0
 python-dotenv>=1.0.0
 pytest>=7.4.0
+twilio>=9.0.0

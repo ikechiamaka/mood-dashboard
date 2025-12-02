@@ -1,0 +1,13 @@
+[
+  {
+    "id": "6546f0c6b0474547ac92ee6e341a5a77",
+    "patient_id": 6,
+    "title": "evening walk with steve",
+    "status": "active",
+    "due_date": "2025-11-06",
+    "notify": true,
+    "created_at": "2025-11-05T22:29:13.273854",
+    "updated_at": "2025-11-05T22:29:13.273854",
+    "created_by": "superadmin@demo.com"
+  }
+]

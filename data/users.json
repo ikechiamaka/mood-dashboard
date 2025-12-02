@@ -1,0 +1,27 @@
+[
+  {
+    "email": "superadmin@demo.com",
+    "password_hash": "scrypt:32768:8:1$mClh8jNvCBGHz87A$aabf51520a4ab363cc0e902440beb426e2a13352805419597c417028ed354023401c96157e412590a67838f4f840894121cefcb686045ed7e037594ad9eeda4c",
+    "role": "super_admin",
+    "name": "Alex Johnson"
+  },
+  {
+    "email": "fac1admin@demo.com",
+    "password_hash": "scrypt:32768:8:1$NVLo7cMXIQEVTjXv$85e45cfdcc27897119bbd24f0c361c610b60aacea88d42683a411cdf708f780f4f3e0a10a470182cae2fea69b528bc1b68b195a5bde570499b32a0fe5caa57ea",
+    "role": "facility_admin",
+    "name": "Sarah Miller",
+    "facility_id": 1
+  },
+  {
+    "email": "staff1@demo.com",
+    "password_hash": "scrypt:32768:8:1$VFYeO3v9unLkwQJR$66e4e563f867615710e5d6fb548e86580ce598ce4e0f2e2f375b530e9fd5656ca207b1960e4b495b1ab7e1526b65230aaff8b603a91ecf06d2f185f02b9c5c6d",
+    "role": "staff",
+    "name": "James Wilson",
+    "facility_id": 1,
+    "assigned_patient_ids": [
+      1,
+      3,
+      5
+    ]
+  }
+]

@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+{% block title %}Admin - NeuroSense{% endblock %}
+
+{% block content %}
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="sidebar-brand">
+    <i class="fas fa-brain me-2"></i><span>NeuroSense</span>
+  </div>
+  <ul class="sidebar-nav">
+    <li class="sidebar-item"><a href="/dashboard" class="sidebar-link"><i class="fas fa-home"></i><span>Dashboard</span></a></li>
+    <li class="sidebar-item"><a href="/admin" class="sidebar-link active"><i class="fas fa-tools"></i><span>Admin</span></a></li>
+  </ul>
+  <div class="p-3">
+    <a class="btn btn-outline-light btn-sm w-100" href="/logout"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
+  </div>
+</div>
+
+<!-- Main Content -->
+<div class="main-content">
+  <nav class="navbar navbar-expand-lg px-4">
+    <a class="navbar-brand" href="#"><i class="fas fa-tools me-2"></i><span>Admin</span></a>
+    <div class="ms-auto">
+      <a class="btn btn-outline-primary btn-sm" href="/dashboard"><i class="fas fa-arrow-left me-2"></i>Back to Dashboard</a>
+    </div>
+  </nav>
+
+  <div class="container-fluid py-4">
+    <!-- Facility Management -->
+    <div class="col-12 mb-4">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h5 class="mb-0"><i class="fas fa-hospital me-2"></i>Facility Management</h5>
+        <span class="text-muted small">Admins only</span>
+      </div>
+      <div class="row">
+        <div class="col-xl-4 mb-4">
+          <div class="card-custom">
+            <div class="card-title">Beds</div>
+            <form class="row g-2 mb-3" onsubmit="return false;">
+              <div class="col-5"><input id="bedName" class="form-control form-control-sm" placeholder="Bed name" /></div>
+              <div class="col-3"><input id="bedRoom" class="form-control form-control-sm" placeholder="Room" /></div>
+              <div class="col-4"><input id="bedPatient" class="form-control form-control-sm" placeholder="Patient (opt)" /></div>
+              <div class="col-12 text-end"><button id="addBedBtn" class="btn btn-sm btn-primary">Add Bed</button></div>
+            </form>
+            <ul id="bedsList" class="list-group list-group-flush small"></ul>
+          </div>
+        </div>
+        <div class="col-xl-4 mb-4">
+          <div class="card-custom">
+            <div class="card-title">Staff Contacts</div>
+            <form class="row g-2 mb-3" onsubmit="return false;">
+              <div class="col-6"><input id="staffName" class="form-control form-control-sm" placeholder="Name" /></div>
+              <div class="col-6"><input id="staffPhone" class="form-control form-control-sm" placeholder="+1..." /></div>
+              <div class="col-12 text-end"><button id="addStaffBtn" class="btn btn-sm btn-primary">Add Staff</button></div>
+            </form>
+            <ul id="staffList" class="list-group list-group-flush small"></ul>
+          </div>
+        </div>
+        <div class="col-xl-4 mb-4">
+          <div class="card-custom">
+            <div class="card-title">Shifts</div>
+            <form class="row g-2 mb-3" onsubmit="return false;">
+              <div class="col-6"><input id="shiftName" class="form-control form-control-sm" placeholder="Shift name" /></div>
+              <div class="col-3"><input id="shiftStart" class="form-control form-control-sm" placeholder="Start HH:MM" /></div>
+              <div class="col-3"><input id="shiftEnd" class="form-control form-control-sm" placeholder="End HH:MM" /></div>
+              <div class="col-8"><input id="shiftDays" class="form-control form-control-sm" placeholder="Days e.g. 0,1,2" /></div>
+              <div class="col-4"><input id="shiftStaffIds" class="form-control form-control-sm" placeholder="Staff IDs" /></div>
+              <div class="col-12 text-end"><button id="addShiftBtn" class="btn btn-sm btn-primary">Add Shift</button></div>
+            </form>
+            <ul id="shiftsList" class="list-group list-group-flush small"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- User Management -->
+    <div class="col-12 mb-4">
+      <div class="d-flex align-items-center justify-content-between mb-2">
+        <h5 class="mb-0"><i class="fas fa-users-cog me-2"></i>User Management</h5>
+        <span class="text-muted small">Admins only</span>
+      </div>
+      <div class="card-custom">
+        <div class="card-title">Add User</div>
+        <form class="row g-2 mb-3" onsubmit="return false;">
+          <div class="col-xl-3 col-md-6"><input id="userEmail" class="form-control form-control-sm" placeholder="Email" /></div>
+          <div class="col-xl-2 col-md-6"><input id="userName" class="form-control form-control-sm" placeholder="Name (opt)" /></div>
+          <div class="col-xl-2 col-md-6"><input id="userPassword" type="password" class="form-control form-control-sm" placeholder="Password" /></div>
+          <div class="col-xl-2 col-md-6">
+            <select id="userRole" class="form-select form-select-sm">
+              <option value="staff">Staff</option>
+              <option value="facility_admin">Facility Admin</option>
+              <option value="super_admin">Super Admin</option>
+            </select>
+          </div>
+          <div class="col-xl-1 col-md-6"><input id="userFacilityId" class="form-control form-control-sm" placeholder="Facility" /></div>
+          <div class="col-xl-2 col-md-6"><input id="userAssigned" class="form-control form-control-sm" placeholder="Assigned IDs (1,2)" /></div>
+          <div class="col-12 text-end"><button id="addUserBtn" class="btn btn-sm btn-primary">Add User</button></div>
+        </form>
+        <ul id="usersList" class="list-group list-group-flush small"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

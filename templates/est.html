@@ -1,0 +1,1430 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="light">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>Advanced Healthcare Dashboard</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4e73df;
+            --primary-gradient: linear-gradient(135deg, #4e73df 0%, #224abe 100%);
+            --success: #1cc88a;
+            --success-gradient: linear-gradient(135deg, #1cc88a 0%, #13855c 100%);
+            --warning: #f6c23e;
+            --warning-gradient: linear-gradient(135deg, #f6c23e 0%, #dda20a 100%);
+            --danger: #e74a3b;
+            --danger-gradient: linear-gradient(135deg, #e74a3b 0%, #be2617 100%);
+            --info: #36b9cc;
+            --info-gradient: linear-gradient(135deg, #36b9cc 0%, #258391 100%);
+            --body-bg: #f8f9fc;
+            --card-bg: #ffffff;
+            --text-color: #5a5c69;
+            --nav-bg: #ffffff;
+            --sidebar-bg: #4e73df;
+            --sidebar-text: rgba(255, 255, 255, 0.8);
+            --sidebar-hover: rgba(255, 255, 255, 0.1);
+            --super-admin: #6f42c1;
+            --facility-admin: #1cc88a;
+            --staff: #36b9cc;
+            --card-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.15);
+            --card-hover-shadow: 0 0.5rem 2rem rgba(58, 59, 69, 0.3);
+        }
+
+        .dark-theme {
+            --body-bg: #1a1a1d;
+            --card-bg: #2d2d2d;
+            --text-color: #e9ecef;
+            --nav-bg: #2d2d2d;
+            --sidebar-bg: #2d2d2d;
+            --sidebar-text: rgba(255, 255, 255, 0.8);
+            --sidebar-hover: rgba(255, 255, 255, 0.1);
+            --card-shadow: 0 0.15rem 1.75rem 0 rgba(0, 0, 0, 0.3);
+            --card-hover-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.4);
+        }
+
+        body {
+            background: var(--body-bg);
+            color: var(--text-color);
+            font-family: 'Poppins', 'Segoe UI', sans-serif;
+            transition: .3s;
+            overflow-x: hidden;
+        }
+
+        /* Enhanced Sidebar */
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 280px;
+            background: var(--sidebar-bg);
+            color: var(--sidebar-text);
+            z-index: 100;
+            transition: all 0.3s;
+            box-shadow: var(--card-shadow);
+            background-image: linear-gradient(180deg, var(--sidebar-bg) 10%, #224abe 100%);
+            background-size: cover;
+        }
+
+        .sidebar-brand {
+            height: 100px;
+            padding: 1.5rem 1rem;
+            font-size: 1.2rem;
+            font-weight: 800;
+            text-align: center;
+            color: #fff;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .sidebar-brand-icon {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .sidebar-nav {
+            padding: 0;
+            list-style: none;
+        }
+
+        .sidebar-item {
+            position: relative;
+            margin: 0.5rem 1rem;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            color: var(--sidebar-text);
+            text-decoration: none;
+            transition: all 0.15s;
+            border-radius: 10px;
+        }
+
+        .sidebar-link:hover {
+            background: var(--sidebar-hover);
+            color: #fff;
+            transform: translateX(5px);
+        }
+
+        .sidebar-link.active {
+            background: rgba(255, 255, 255, 0.15);
+            color: #fff;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.1);
+        }
+
+        .sidebar-link i {
+            margin-right: 0.75rem;
+            font-size: 1.1rem;
+            width: 24px;
+            text-align: center;
+        }
+
+        .main-content {
+            margin-left: 280px;
+            min-height: 100vh;
+            padding-bottom: 2rem;
+            transition: all 0.3s;
+        }
+
+        /* Enhanced Navbar */
+        .navbar {
+            background: var(--nav-bg) !important;
+            box-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.1);
+            padding: 0.8rem 1.5rem;
+            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.8) !important;
+        }
+
+        .dark-theme .navbar {
+            background: rgba(45, 45, 45, 0.8) !important;
+        }
+
+        .navbar-brand {
+            color: var(--primary) !important;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            font-size: 1.5rem;
+        }
+
+        /* Enhanced Cards */
+        .card-custom {
+            background: var(--card-bg);
+            border: none;
+            border-radius: 15px;
+            box-shadow: var(--card-shadow);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            transition: .3s;
+            height: 100%;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card-custom::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 5px;
+            background: var(--primary-gradient);
+        }
+
+        .card-custom:hover {
+            box-shadow: var(--card-hover-shadow);
+            transform: translateY(-5px);
+        }
+
+        .card-title {
+            font-weight: 600;
+            margin-bottom: 1.2rem;
+            color: var(--text-color);
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+        }
+
+        .card-title i {
+            margin-right: 0.5rem;
+            font-size: 1.2rem;
+        }
+
+        /* Enhanced Role Badges */
+        .role-badge {
+            padding: 0.5em 1em;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .super-admin-badge {
+            background: var(--primary-gradient);
+            color: white;
+        }
+
+        .facility-admin-badge {
+            background: var(--success-gradient);
+            color: white;
+        }
+
+        .staff-badge {
+            background: var(--info-gradient);
+            color: white;
+        }
+
+        /* Enhanced Stats Cards */
+        .stat-card {
+            display: flex;
+            align-items: center;
+            padding: 1.2rem;
+            border-radius: 12px;
+            background: var(--card-bg);
+            box-shadow: var(--card-shadow);
+            transition: all 0.3s;
+            border-left: 4px solid var(--primary);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--card-hover-shadow);
+        }
+
+        .stat-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
+            background: rgba(78, 115, 223, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 1.2rem;
+            color: var(--primary);
+            font-size: 1.5rem;
+        }
+
+        .stat-content {
+            flex: 1;
+        }
+
+        .stat-title {
+            font-size: 0.9rem;
+            color: var(--text-color);
+            margin-bottom: 0.25rem;
+            font-weight: 500;
+        }
+
+        .stat-value {
+            font-size: 1.7rem;
+            font-weight: 700;
+            margin-bottom: 0;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* Enhanced Charts */
+        .chart-wrapper {
+            position: relative;
+            width: 100%;
+            height: 240px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .chart-center-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            z-index: 1;
+        }
+
+        /* Enhanced Tabs */
+        .nav-tabs {
+            border-bottom: 2px solid rgba(78, 115, 223, 0.2);
+        }
+
+        .nav-tabs .nav-link {
+            border: none;
+            border-bottom: 3px solid transparent;
+            color: var(--text-color);
+            font-weight: 600;
+            padding: 0.9rem 1.5rem;
+            transition: all 0.3s;
+        }
+
+        .nav-tabs .nav-link:hover {
+            border-color: transparent;
+            background: rgba(78, 115, 223, 0.1);
+        }
+
+        .nav-tabs .nav-link.active {
+            border-bottom: 3px solid var(--primary);
+            color: var(--primary);
+            background: transparent;
+        }
+
+        /* Enhanced Buttons */
+        .btn {
+            border-radius: 8px;
+            font-weight: 500;
+            padding: 0.5rem 1.2rem;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: var(--primary-gradient);
+            border: none;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(78, 115, 223, 0.4);
+        }
+
+        /* Role Switch Enhancement */
+        .role-switcher {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1rem;
+            box-shadow: var(--card-shadow);
+        }
+
+        .role-option {
+            padding: 0.8rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 0.5rem;
+            border: 2px solid transparent;
+        }
+
+        .role-option:hover {
+            background: rgba(78, 115, 223, 0.1);
+        }
+
+        .role-option.active {
+            border-color: var(--primary);
+            background: rgba(78, 115, 223, 0.1);
+        }
+
+        /* Other enhanced elements */
+        .access-warning {
+            background-color: rgba(231, 74, 59, 0.1);
+            border-left: 4px solid var(--danger);
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+        }
+
+        .weather-card {
+            display: flex;
+            align-items: center;
+            padding: 1.2rem;
+            border-radius: 12px;
+            background: var(--info-gradient);
+            color: white;
+            box-shadow: var(--card-shadow);
+        }
+
+        .journal-entry {
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            background: rgba(78, 115, 223, 0.05);
+            border-left: 4px solid var(--primary);
+            transition: all 0.3s;
+        }
+
+        .journal-entry:hover {
+            transform: translateX(5px);
+            background: rgba(78, 115, 223, 0.1);
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 80px;
+            }
+
+            .sidebar-brand span {
+                display: none;
+            }
+
+            .sidebar-link span {
+                display: none;
+            }
+
+            .sidebar-link i {
+                margin-right: 0;
+                font-size: 1.3rem;
+            }
+
+            .main-content {
+                margin-left: 80px;
+            }
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease forwards;
+        }
+
+        .delay-1 {
+            animation-delay: 0.1s;
+        }
+
+        .delay-2 {
+            animation-delay: 0.2s;
+        }
+
+        .delay-3 {
+            animation-delay: 0.3s;
+        }
+
+        .delay-4 {
+            animation-delay: 0.4s;
+        }
+
+        .delay-5 {
+            animation-delay: 0.5s;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-brand">
+            <div class="sidebar-brand-icon">
+                <i class="fas fa-brain"></i>
+            </div>
+            <span>NeuroSense</span>
+        </div>
+        <ul class="sidebar-nav mt-4">
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link active">
+                    <i class="fas fa-home"></i>
+                    <span>Dashboard</span>
+                </a>
+            </li>
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link">
+                    <i class="fas fa-heartbeat"></i>
+                    <span>Health Metrics</span>
+                </a>
+            </li>
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link">
+                    <i class="fas fa-chart-line"></i>
+                    <span>Trends</span>
+                </a>
+            </li>
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link">
+                    <i class="fas fa-book"></i>
+                    <span>Journal</span>
+                </a>
+            </li>
+            <li class="sidebar-item">
+                <a href="#" class="sidebar-link">
+                    <i class="fas fa-cog"></i>
+                    <span>Settings</span>
+                </a>
+            </li>
+            <li class="sidebar-item mt-4">
+                <a href="#" class="sidebar-link">
+                    <i class="fas fa-question-circle"></i>
+                    <span>Help & Support</span>
+                </a>
+            </li>
+        </ul>
+
+        <div class="px-3 mt-4">
+            <div class="role-switcher">
+                <h6 class="mb-3 text-white">Switch Role</h6>
+                <div class="role-option active" onclick="switchRole('super_admin')">
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-user-shield me-2 text-primary"></i>
+                        <div>Super Admin</div>
+                    </div>
+                </div>
+                <div class="role-option" onclick="switchRole('facility_admin')">
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-user-cog me-2 text-success"></i>
+                        <div>Facility Admin</div>
+                    </div>
+                </div>
+                <div class="role-option" onclick="switchRole('staff')">
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-user-md me-2 text-info"></i>
+                        <div>Staff Provider</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- NAVBAR -->
+        <nav class="navbar navbar-expand-lg px-4">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-brain me-2"></i>
+                <span>NeuroSense Dashboard</span>
+            </a>
+            <div class="ms-auto d-flex align-items-center">
+                <div class="dropdown me-3">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button"
+                        id="notificationsDropdown" data-bs-toggle="dropdown">
+                        <i class="fas fa-bell"></i>
+                        <span class="badge bg-danger rounded-pill">3</span>
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-end p-3" style="width: 320px;">
+                        <h6 class="dropdown-header mb-2">Alerts Center</h6>
+                        <div class="alert-item mb-2">
+                            <div class="alert-title">High stress detected</div>
+                            <small>10 minutes ago</small>
+                        </div>
+                        <div class="alert-item mb-2">
+                            <div class="alert-title">Irregular movement pattern</div>
+                            <small>2 hours ago</small>
+                        </div>
+                        <div class="alert-item">
+                            <div class="alert-title">New insights available</div>
+                            <small>Yesterday</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-check form-switch me-3">
+                    <input class="form-check-input" id="themeSwitch" type="checkbox" />
+                    <label class="form-check-label" for="themeSwitch"><i class="fas fa-moon"></i></label>
+                </div>
+
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-primary dropdown-toggle d-flex align-items-center" type="button"
+                        id="profileDropdown" data-bs-toggle="dropdown">
+                        <img src="https://ui-avatars.com/api/?name=Alex+Johnson&background=4e73df&color=fff"
+                            class="rounded-circle me-2" style="width:32px;height:32px;object-fit:cover;">
+                        <span id="currentUserName">Alex Johnson</span>
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-end">
+                        <a class="dropdown-item" href="#"><i class="fas fa-user me-2"></i> Profile</a>
+                        <a class="dropdown-item" href="#"><i class="fas fa-cog me-2"></i> Settings</a>
+                        <div class="dropdown-divider"></div>
+                        <a class="dropdown-item" href="#"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container-fluid py-4">
+            <!-- Role Indicator -->
+            <div id="roleIndicator" class="alert alert-primary mb-4 fade-in">
+                <i class="fas fa-info-circle me-2"></i>
+                <span id="roleDescription">You are viewing as Super Administrator with access to all facilities and
+                    patients.</span>
+            </div>
+
+            <!-- Access Warning for Staff -->
+            <div id="staffWarning" class="access-warning d-none fade-in">
+                <i class="fas fa-exclamation-triangle me-2 text-danger"></i>
+                <strong>Staff Access Restriction:</strong> You can only view data for patients assigned to you.
+            </div>
+
+            <!-- Page Heading -->
+            <div class="d-sm-flex align-items-center justify-content-between mb-4 fade-in">
+                <div>
+                    <h1 class="h3 mb-0 text-gray-800">Dashboard Overview</h1>
+                    <p class="text-muted mb-0">Monitor patient health metrics and trends</p>
+                </div>
+                <div>
+                    <button class="d-none d-sm-inline-block btn btn-sm btn-primary shadow-sm me-2">
+                        <i class="fas fa-download fa-sm text-white-50"></i> Export Report
+                    </button>
+                    <button class="d-none d-sm-inline-block btn btn-sm btn-success shadow-sm">
+                        <i class="fas fa-sync-alt fa-sm text-white-50"></i> Refresh Data
+                    </button>
+                </div>
+            </div>
+
+            <!-- 1️⃣ Patient + Health -->
+            <div class="row">
+                <div class="col-xl-3 col-md-6 mb-4 fade-in delay-1">
+                    <div class="card-custom position-relative">
+                        <span id="roleBadge" class="role-badge super-admin-badge">Super Admin</span>
+                        <div class="d-flex align-items-center">
+                            <img src="https://ui-avatars.com/api/?name=Blaine+Cottrell&background=4e73df&color=fff"
+                                class="rounded-circle me-3" style="width:80px;height:80px;object-fit:cover;">
+                            <div>
+                                <h5 class="card-title mb-1">Blaine Cottrell</h5>
+                                <div class="mb-1 small">
+                                    <span class="badge bg-info me-1">Age: 34</span>
+                                    <span class="badge bg-warning">ID: NS-7284</span>
+                                </div>
+                                <div class="small text-muted">
+                                    <div><i class="fas fa-diagnoses me-2"></i> Schizophrenia</div>
+                                    <div><i class="fas fa-allergies me-2"></i> Penicillin</div>
+                                    <div><i class="fas fa-history me-2"></i> Type I Diabetes</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div><strong>Predicted Mood:</strong></div>
+                                <div>
+                                    <span id="predictedMoodValue" class="badge bg-primary p-2">Neutral</span>
+                                </div>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                <div><strong>Last Check-in:</strong></div>
+                                <div>Today, 09:24 AM</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-xl-3 col-md-6 mb-4 fade-in delay-2">
+                    <div class="card-custom">
+                        <div class="card-title"><i class="fas fa-heartbeat"></i> Overall Health Score</div>
+                        <div class="chart-wrapper">
+                            <canvas id="healthDonut"></canvas>
+                            <div id="healthDonutCenter" class="chart-center-text">78%</div>
+                        </div>
+                        <div class="d-flex justify-content-around mt-3">
+                            <div class="text-center">
+                                <div class="text-success"><i class="fas fa-arrow-up"></i> 12%</div>
+                                <div class="small">Last week</div>
+                            </div>
+                            <div class="text-center">
+                                <div class="text-primary">Optimal</div>
+                                <div class="small">Status</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-xl-6 mb-4 fade-in delay-3">
+                    <div class="card-custom">
+                        <div class="card-title"><i class="fas fa-chart-pie"></i> Health Status Overview</div>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="text-center mb-4">
+                                    <div class="mb-2"><i class="fas fa-brain fa-2x text-info"></i></div>
+                                    <div class="h5 mb-1">Mental Health</div>
+                                    <div class="text-success">Stable</div>
+                                    <div class="progress mt-2">
+                                        <div class="progress-bar bg-info" role="progressbar" style="width: 75%"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="text-center mb-4">
+                                    <div class="mb-2"><i class="fas fa-heart fa-2x text-danger"></i></div>
+                                    <div class="h5 mb-1">Physical Health</div>
+                                    <div class="text-warning">Moderate</div>
+                                    <div class="progress mt-2">
+                                        <div class="progress-bar bg-success" role="progressbar" style="width: 65%">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="text-center mb-4">
+                                    <div class="mb-2"><i class="fas fa-walking fa-2x text-primary"></i></div>
+                                    <div class="h5 mb-1">Activity Level</div>
+                                    <div class="text-success">Active</div>
+                                    <div class="progress mt-2">
+                                        <div class="progress-bar bg-warning" role="progressbar" style="width: 85%">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 2️⃣ Quick Stats -->
+            <div class="row">
+                <div class="col-xl-3 col-md-6 mb-4 fade-in delay-1">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-thermometer-half"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-title">Avg Temperature</div>
+                            <div id="tempValue" class="stat-value">72.4°F</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-md-6 mb-4 fade-in delay-2">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-tint"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-title">Avg Humidity</div>
+                            <div id="humidityValue" class="stat-value">45%</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-md-6 mb-4 fade-in delay-3">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-wind"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-title">Air Quality</div>
+                            <div id="airQualityValue" class="stat-value">Good</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-xl-3 col-md-6 mb-4 fade-in delay-4">
+                    <div class="stat-card">
+                        <div class="stat-icon">
+                            <i class="fas fa-running"></i>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-title">Movement</div>
+                            <div id="movementValue" class="stat-value">Active</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3️⃣ Forecast / Weather / Wearable -->
+            <div class="row">
+                <div class="col-xl-4 col-lg-6 mb-4 fade-in delay-1">
+                    <div class="card-custom">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="card-title"><i class="fas fa-exclamation-triangle"></i> Mood Forecast Alerts
+                            </div>
+                            <span class="badge bg-danger">3 Alerts</span>
+                        </div>
+                        <div class="alert-item">
+                            <div class="alert-title">High Stress Detected</div>
+                            <div class="alert-text">Your stress levels have been elevated for the past 2 hours.</div>
+                            <div class="alert-date">Detected today at 10:15 AM</div>
+                        </div>
+                        <div class="alert-item">
+                            <div class="alert-title">Sleep Pattern Disruption</div>
+                            <div class="alert-text">Your sleep was 45 minutes shorter than your average last night.
+                            </div>
+                            <div class="alert-date">Detected today at 7:30 AM</div>
+                        </div>
+                        <div class="alert-item">
+                            <div class="alert-title">Irregular Activity</div>
+                            <div class="alert-text">Movement patterns show decreased activity compared to baseline.
+                            </div>
+                            <div class="alert-date">Detected yesterday at 4:20 PM</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-xl-4 col-lg-6 mb-4 fade-in delay-2">
+                    <div class="card-custom">
+                        <div class="card-title"><i class="fas fa-cloud-sun"></i> Weather & Light Conditions</div>
+                        <div class="weather-card">
+                            <div class="weather-icon">
+                                <i class="fas fa-sun"></i>
+                            </div>
+                            <div class="weather-content">
+                                <div class="weather-temp">72°F</div>
+                                <div class="weather-details">
+                                    <div>Sunny with clear skies</div>
+                                    <div>Humidity: 45% | Wind: 5 mph</div>
+                                    <div>Light: 850 lx (Ideal)</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <div class="d-flex justify-content-between mb-2">
+                                <div>UV Index:</div>
+                                <div><span class="badge bg-success">Low (2)</span></div>
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <div>Pollen Count:</div>
+                                <div><span class="badge bg-warning">Moderate</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-xl-4 col-lg-12 mb-4 fade-in delay-3">
+                    <div class="card-custom">
+                        <div class="card-title"><i class="fas fa-watch"></i> Wearable Sync Status</div>
+                        <div class="sensor-status">
+                            <div class="sensor-icon">
+                                <i class="fas fa-check-circle text-success"></i>
+                            </div>
+                            <div class="sensor-text">All devices synchronized successfully</div>
+                            <div class="sensor-time">Last synced: Today, 09:15 AM</div>
+                        </div>
+                        <div class="mt-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div><i class="fas fa-heartbeat me-2 text-danger"></i> Heart Rate Monitor</div>
+                                <div><span class="badge bg-success">Connected</span></div>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div><i class="fas fa-shoe-prints me-2 text-primary"></i> Activity Tracker</div>
+                                <div><span class="badge bg-success">Connected</span></div>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div><i class="fas fa-moon me-2 text-info"></i> Sleep Tracker</div>
+                                <div><span class="badge bg-success">Connected</span></div>
+                            </div>
+                        </div>
+                        <div class="mt-3 text-center">
+                            <button id="syncWearable" class="btn btn-primary w-100">
+                                <i class="fas fa-sync-alt me-2"></i>Sync Devices Now
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 4️⃣ Goals & Calendar -->
+            <div class="row">
+                <div class="col-lg-6 mb-4 fade-in delay-1">
+                    <div class="card-custom">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="card-title"><i class="fas fa-bullseye"></i> Goals & Streaks</div>
+                            <button id="addGoalBtn" class="btn btn-sm btn-primary">
+                                <i class="fas fa-plus me-1"></i> Add Goal
+                            </button>
+                        </div>
+
+                        <div class="streak-item">
+                            <div class="streak-icon">
+                                <i class="fas fa-walking"></i>
+                            </div>
+                            <div class="streak-content">
+                                <div class="streak-title">Daily Steps Goal</div>
+                                <div class="streak-days">8,240 / 10,000 steps</div>
+                                <div class="progress mt-2">
+                                    <div class="progress-bar bg-success" role="progressbar" style="width: 82%"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="streak-item">
+                            <div class="streak-icon">
+                                <i class="fas fa-bed"></i>
+                            </div>
+                            <div class="streak-content">
+                                <div class="streak-title">Sleep Consistency</div>
+                                <div class="streak-days">7-day streak! Current: 7h 25m</div>
+                                <div class="progress mt-2">
+                                    <div class="progress-bar bg-info" role="progressbar" style="width: 100%"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="streak-item">
+                            <div class="streak-icon">
+                                <i class="fas fa-book"></i>
+                            </div>
+                            <div class="streak-content">
+                                <div class="streak-title">Journal Entries</div>
+                                <div class="streak-days">3/5 entries this week</div>
+                                <div class="progress mt-2">
+                                    <div class="progress-bar bg-warning" role="progressbar" style="width: 60%"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-3">
+                            <div class="d-flex justify-content-between">
+                                <div><strong>Total Streak:</strong></div>
+                                <div><span class="badge bg-success">14 days</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-lg-6 mb-4 fade-in delay-2">
+                    <div class="card-custom">
+                        <div class="card-title"><i class="fas fa-calendar-alt"></i> Emotion Calendar</div>
+                        <div class="d-flex justify-content-between mb-3">
+                            <div><strong>July 2024</strong></div>
+                            <div>
+                                <button class="btn btn-sm btn-outline-primary"><i
+                                        class="fas fa-chevron-left"></i></button>
+                                <button class="btn btn-sm btn-outline-primary"><i
+                                        class="fas fa-chevron-right"></i></button>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-12">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <div class="calendar-header">S</div>
+                                    <div class="calendar-header">M</div>
+                                    <div class="calendar-header">T</div>
+                                    <div class="calendar-header">W</div>
+                                    <div class="calendar-header">T</div>
+                                    <div class="calendar-header">F</div>
+                                    <div class="calendar-header">S</div>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <div class="d-flex flex-wrap">
+                                    <!-- Calendar days would be generated here -->
+                                    <div class="calendar-day bg-success text-white">1</div>
+                                    <div class="calendar-day bg-success text-white">2</div>
+                                    <div class="calendar-day bg-success text-white">3</div>
+                                    <div class="calendar-day bg-info text-white">4</div>
+                                    <div class="calendar-day bg-info text-white">5</div>
+                                    <div class="calendar-day bg-warning text-dark">6</div>
+                                    <div class="calendar-day bg-warning text-dark">7</div>
+                                    <div class="calendar-day bg-warning text-dark">8</div>
+                                    <div class="calendar-day bg-danger text-white">9</div>
+                                    <div class="calendar-day bg-danger text-white">10</div>
+                                    <div class="calendar-day bg-danger text-white">11</div>
+                                    <div class="calendar-day bg-success text-white">12</div>
+                                    <div class="calendar-day bg-success text-white">13</div>
+                                    <div class="calendar-day bg-success text-white">14</div>
+                                    <div class="calendar-day bg-info text-white">15</div>
+                                    <div class="calendar-day bg-info text-white">16</div>
+                                    <div class="calendar-day bg-info text-white">17</div>
+                                    <div class="calendar-day bg-warning text-dark">18</div>
+                                    <div class="calendar-day bg-warning text-dark">19</div>
+                                    <div class="calendar-day bg-warning text-dark">20</div>
+                                    <div class="calendar-day bg-danger text-white">21</div>
+                                    <div class="calendar-day bg-danger text-white">22</div>
+                                    <div class="calendar-day bg-success text-white">23</div>
+                                    <div class="calendar-day bg-success text-white">24</div>
+                                    <div class="calendar-day bg-success text-white">25</div>
+                                    <div class="calendar-day bg-info text-white">26</div>
+                                    <div class="calendar-day bg-info text-white">27</div>
+                                    <div class="calendar-day bg-warning text-dark">28</div>
+                                    <div class="calendar-day bg-warning text-dark">29</div>
+                                    <div class="calendar-day bg-danger text-white">30</div>
+                                    <div class="calendar-day bg-danger text-white">31</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <div class="d-flex flex-wrap">
+                                <div class="me-3 mb-2"><span class="badge bg-success me-1"></span> Positive</div>
+                                <div class="me-3 mb-2"><span class="badge bg-info me-1"></span> Neutral</div>
+                                <div class="me-3 mb-2"><span class="badge bg-warning me-1"></span> Moderate</div>
+                                <div class="mb-2"><span class="badge bg-danger me-1"></span> Challenging</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 5️⃣ Journal / Check‑In Tabs -->
+            <div class="row">
+                <div class="col-12 mb-4 fade-in delay-1">
+                    <div class="card-custom">
+                        <ul class="nav nav-tabs" id="jcTabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="journal-tab" data-bs-toggle="tab"
+                                    data-bs-target="#journal" type="button">
+                                    <i class="fas fa-book me-2"></i>Journal
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="checkin-tab" data-bs-toggle="tab" data-bs-target="#checkin"
+                                    type="button">
+                                    <i class="fas fa-check-circle me-2"></i>Check‑In
+                                </button>
+                            </li>
+                        </ul>
+                        <div class="tab-content p-3">
+                            <!-- Journal Pane -->
+                            <div class="tab-pane fade show active" id="journal">
+                                <div class="mb-3">
+                                    <textarea id="journalText" class="form-control mb-2" rows="3"
+                                        placeholder="Write your thoughts here..."></textarea>
+                                    <button id="saveJournal" class="btn btn-primary">
+                                        <i class="fas fa-save me-2"></i>Save Entry
+                                    </button>
+                                </div>
+                                <h6 class="mb-3">Recent Entries</h6>
+                                <div id="journalList" style="max-height:250px;overflow:auto;">
+                                    <div class="journal-entry">
+                                        <div class="entry-date">Today, 09:24 AM</div>
+                                        <div class="entry-text">Feeling more focused this morning after a good night's
+                                            sleep. The weather is beautiful and I'm looking forward to my walk later.
+                                        </div>
+                                    </div>
+                                    <div class="journal-entry">
+                                        <div class="entry-date">Yesterday, 07:45 PM</div>
+                                        <div class="entry-text">Had a productive therapy session today. We discussed
+                                            coping strategies for stressful situations. Feeling optimistic about
+                                            implementing these techniques.</div>
+                                    </div>
+                                    <div class="journal-entry">
+                                        <div class="entry-date">July 9, 06:30 PM</div>
+                                        <div class="entry-text">Noticed my stress levels rising in the afternoon. Took a
+                                            15-minute meditation break which helped significantly. Need to remember to
+                                            take these breaks more regularly.</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Check‑In Pane -->
+                            <div class="tab-pane fade" id="checkin">
+                                <div class="row mb-4">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Current Mood</label>
+                                        <select id="checkinMood" class="form-select">
+                                            <option value="">Select your mood</option>
+                                            <option value="1">😢 Sad</option>
+                                            <option value="2">😕 Low</option>
+                                            <option value="3" selected>😐 Neutral</option>
+                                            <option value="4">🙂 Fair</option>
+                                            <option value="5">😊 Good</option>
+                                            <option value="6">😄 Happy</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">Stress Level</label>
+                                        <select id="checkinStress" class="form-select">
+                                            <option value="">Select stress level</option>
+                                            <option value="1">😌 Low</option>
+                                            <option value="2">☺️ Mild</option>
+                                            <option value="3" selected>😐 Moderate</option>
+                                            <option value="4">😟 High</option>
+                                            <option value="5">😰 Very High</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-12">
+                                        <button id="saveCheckin" class="btn btn-success w-100">
+                                            <i class="fas fa-check-circle me-2"></i>Submit Check‑In
+                                        </button>
+                                    </div>
+                                </div>
+                                <h6 class="mb-3">Recent Check-ins</h6>
+                                <div id="checkinList" style="max-height:250px;overflow:auto;">
+                                    <div class="journal-entry">
+                                        <div class="entry-date">Today, 09:24 AM</div>
+                                        <div class="entry-text">Mood: 😐 Neutral | Stress: 😐 Moderate</div>
+                                    </div>
+                                    <div class="journal-entry">
+                                        <div class="entry-date">Yesterday, 08:15 PM</div>
+                                        <div class="entry-text">Mood: 🙂 Fair | Stress: 😌 Low</div>
+                                    </div>
+                                    <div class="journal-entry">
+                                        <div class="entry-date">Yesterday, 01:30 PM</div>
+                                        <div class="entry-text">Mood: 😢 Sad | Stress: 😟 High</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 6️⃣ Weekly Narrative -->
+            <div class="row">
+                <div class="col-12 mb-4 fade-in delay-1">
+                    <div class="insight-card">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="card-title"><i class="fas fa-chart-line"></i> Weekly Narrative Insights</div>
+                            <i class="fas fa-robot fa-lg text-primary"></i>
+                        </div>
+                        <div id="weeklyInsights" class="insight-text">
+                            <p>This week shows a positive trend in your overall well-being. Your activity levels have
+                                increased by 15% compared to last week, and your sleep consistency has improved
+                                significantly. The mood forecast indicates stable emotional patterns with only minor
+                                fluctuations.</p>
+                            <p class="mb-0">Notable improvements: Stress management techniques seem effective as your
+                                high-stress periods decreased by 30%. Your journal entries reflect increased mindfulness
+                                and positive outlook. Continue focusing on your morning routine which appears to set a
+                                positive tone for your day.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 7️⃣ Trends -->
+            <div class="row">
+                <div class="col-lg-6 mb-4 fade-in delay-1">
+                    <div class="card-custom">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="card-title"><i class="fas fa-smile"></i> Mood Trend (Last 7 Days)</div>
+                            <div>
+                                <span class="badge bg-primary me-2">Improving</span>
+                                <span class="badge bg-success">+12%</span>
+                            </div>
+                        </div>
+                        <div class="trend-chart">
+                            <canvas id="moodChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-6 mb-4 fade-in delay-2">
+                    <div class="card-custom">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="card-title"><i class="fas fa-walking"></i> Movement Trend (Last 7 Days)</div>
+                            <div>
+                                <span class="badge bg-success me-2">Active</span>
+                                <span class="badge bg-primary">+8%</span>
+                            </div>
+                        </div>
+                        <div class="trend-chart">
+                            <canvas id="moveChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // User roles configuration
+        const roles = {
+            super_admin: {
+                id: 'super_admin',
+                name: 'Super Administrator',
+                description: 'You have full access to all facilities and patients.',
+                badgeClass: 'super-admin-badge',
+                badgeText: 'Super Admin',
+                userName: 'Alex Johnson (Super Admin)',
+                facilityAccess: 'all',
+                patientAccess: 'all'
+            },
+            facility_admin: {
+                id: 'facility_admin',
+                name: 'Facility Administrator',
+                description: 'You have access to all patients in Facility 1.',
+                badgeClass: 'facility-admin-badge',
+                badgeText: 'Facility Admin',
+                userName: 'Sarah Miller (Facility 1 Admin)',
+                facilityId: 1,
+                patientAccess: 'facility'
+            },
+            staff: {
+                id: 'staff',
+                name: 'Staff Provider',
+                description: 'You have access only to your assigned patients in Facility 1.',
+                badgeClass: 'staff-badge',
+                badgeText: 'Staff Provider',
+                userName: 'James Wilson (Staff Provider)',
+                facilityId: 1,
+                assignedPatientIds: [1, 3, 5] // Example patient IDs
+            }
+        };
+
+        // Current user state
+        let currentUser = roles.super_admin;
+
+        // Function to switch roles
+        function switchRole(roleId) {
+            currentUser = roles[roleId];
+
+            // Update role options
+            document.querySelectorAll('.role-option').forEach(option => {
+                option.classList.remove('active');
+            });
+            event.currentTarget.classList.add('active');
+
+            updateUIForCurrentRole();
+        }
+
+        // Update UI based on current role
+        function updateUIForCurrentRole() {
+            // Update role badge
+            const roleBadge = document.getElementById('roleBadge');
+            roleBadge.className = `role-badge ${currentUser.badgeClass}`;
+            roleBadge.textContent = currentUser.badgeText;
+
+            // Update role description
+            document.getElementById('roleDescription').textContent = currentUser.description;
+
+            // Update user name
+            document.getElementById('currentUserName').textContent = currentUser.userName;
+
+            // Show/hide staff warning
+            const staffWarning = document.getElementById('staffWarning');
+            if (currentUser.id === 'staff') {
+                staffWarning.classList.remove('d-none');
+            } else {
+                staffWarning.classList.add('d-none');
+            }
+
+            // Simulate data filtering based on role
+            filterDataBasedOnRole();
+        }
+
+        // Simulate data filtering based on role
+        function filterDataBasedOnRole() {
+            let dataStatus = '';
+
+            switch (currentUser.id) {
+                case 'super_admin':
+                    dataStatus = 'Showing data for ALL facilities and patients';
+                    break;
+                case 'facility_admin':
+                    dataStatus = `Showing data for Facility ${currentUser.facilityId} (all patients)`;
+                    break;
+                case 'staff':
+                    dataStatus = `Showing data for your assigned patients: ${currentUser.assignedPatientIds.join(', ')}`;
+                    break;
+            }
+
+            console.log(`Data filtering applied: ${dataStatus}`);
+        }
+
+        // Theme + Avatar
+        const themeSwitch = document.getElementById('themeSwitch'),
+            themeSelect = document.getElementById('themeSelect'),
+            avatarUpload = document.getElementById('avatarUpload');
+
+        if (localStorage.theme === 'dark') {
+            document.body.classList.add('dark-theme');
+            themeSwitch.checked = true;
+        }
+
+        themeSwitch.onchange = e => {
+            const dark = e.target.checked;
+            document.body.classList.toggle('dark-theme', dark);
+            localStorage.theme = dark ? 'dark' : 'light';
+        };
+
+        avatarUpload.onchange = () => {
+            const file = avatarUpload.files[0];
+            if (!file) return;
+            alert('Avatar updated successfully!');
+        };
+
+        // Initialize Charts
+        function initCharts() {
+            // Health Donut
+            new Chart(document.getElementById('healthDonut'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['Mood', 'Activity', 'Sleep', 'Environment'],
+                    datasets: [{
+                        data: [35, 25, 25, 15],
+                        backgroundColor: [
+                            '#4e73df',
+                            '#1cc88a',
+                            '#36b9cc',
+                            '#f6c23e'
+                        ],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    cutout: '75%',
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) {
+                                    return `${context.label}: ${context.parsed}%`;
+                                }
+                            }
+                        }
+                    },
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+
+            // Mood Chart
+            const moodCtx = document.getElementById('moodChart').getContext('2d');
+            new Chart(moodCtx, {
+                type: 'line',
+                data: {
+                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                    datasets: [{
+                        label: 'Mood Level',
+                        data: [3.2, 4.1, 3.8, 4.5, 4.8, 5.2, 4.9],
+                        borderColor: '#4e73df',
+                        backgroundColor: 'rgba(78, 115, 223, 0.05)',
+                        tension: 0.4,
+                        fill: true,
+                        pointBackgroundColor: '#fff',
+                        pointBorderColor: '#4e73df',
+                        pointBorderWidth: 2,
+                        pointRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            min: 1,
+                            max: 6,
+                            ticks: {
+                                callback: function (value) {
+                                    const moods = ['', 'Sad', 'Low', 'Neutral', 'Fair', 'Good', 'Happy'];
+                                    return moods[value];
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) {
+                                    const moods = ['', 'Sad', 'Low', 'Neutral', 'Fair', 'Good', 'Happy'];
+                                    return `Mood: ${moods[context.parsed.y]}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Movement Chart
+            const moveCtx = document.getElementById('moveChart').getContext('2d');
+            new Chart(moveCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                    datasets: [{
+                        label: 'Steps (thousands)',
+                        data: [7.2, 8.5, 6.8, 9.2, 8.4, 10.1, 7.9],
+                        backgroundColor: '#1cc88a',
+                        borderRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Steps (thousands)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initialize when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function () {
+            initCharts();
+            updateUIForCurrentRole();
+
+            // Sync wearable button
+            document.getElementById('syncWearable').addEventListener('click', function () {
+                const btn = this;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i> Syncing...';
+                btn.disabled = true;
+
+                setTimeout(function () {
+                    btn.innerHTML = '<i class="fas fa-check-circle me-2"></i> Synced!';
+                    setTimeout(function () {
+                        btn.innerHTML = '<i class="fas fa-sync-alt me-2"></i> Sync Devices Now';
+                        btn.disabled = false;
+                    }, 2000);
+                }, 1500);
+            });
+
+            // Add goal button
+            document.getElementById('addGoalBtn').addEventListener('click', function () {
+                const goalName = prompt("Enter your new goal:");
+                if (goalName) {
+                    alert(`Goal "${goalName}" added successfully!`);
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

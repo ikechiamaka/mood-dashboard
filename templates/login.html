@@ -2,137 +2,305 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Sensor Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body {
-            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
-            min-height: 100vh;
-            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-        }
-
-        .login-container {
-            max-width: 400px;
-            margin: 5rem auto;
-            padding: 2rem;
-            background: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
-        }
-
-        .login-title {
-            color: #2c3e50;
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin-bottom: 1.5rem;
-            text-align: center;
-        }
-
-        .form-control {
-            border: none;
-            border-radius: 10px;
-            background: rgba(255, 255, 255, 0.7);
-            transition: all 0.3s ease;
-        }
-
-        .form-control:focus {
-            background: white;
-            box-shadow: 0 0 0 2px rgba(44, 117, 230, 0.2);
-        }
-
-        .btn-primary {
-            background: linear-gradient(135deg, #2575fc 0%, #6a11cb 100%);
-            border: none;
-            border-radius: 10px;
-            padding: 0.75rem 2rem;
-            transition: transform 0.2s ease;
-            width: 100%;
-        }
-
-        .btn-primary:hover {
-            transform: translateY(-2px);
-        }
-
-        .password-toggle {
-            position: absolute;
-            right: 15px;
-            top: 50%;
-            transform: translateY(-50%);
-            cursor: pointer;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NeuroSense Login</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}" />
 </head>
 
-<body>
-    <div class="position-absolute w-100 h-100">
-        <svg class="waves" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320">
-            <path fill="#ffffff10" fill-opacity="1"
-                d="M0,224L48,208C96,192,192,160,288,160C384,160,480,192,576,192C672,192,768,160,864,160C960,160,1056,192,1152,208C1248,224,1344,224,1392,224L1440,224L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z">
-            </path>
-        </svg>
-    </div>
-
-    <div class="container">
-        <div class="login-container position-relative">
-            <h2 class="login-title">Sensor Dashboard Login</h2>
-
-            <div id="errorMsg" class="alert alert-danger d-none" role="alert">
-                Invalid credentials. <a href="/reset-password" class="alert-link">Reset password?</a>
-            </div>
-
-            <form action="/login" method="POST">
-                <div class="mb-3 position-relative">
-                    <label for="email" class="form-label">Email address</label>
-                    <input type="email" class="form-control" id="email" name="email" placeholder="name@example.com"
-                        autocomplete="username" required>
-                </div>
-                <div class="mb-3 position-relative">
-                    <label for="password" class="form-label">Password</label>
-                    <input type="password" class="form-control" id="password" name="password"
-                        placeholder="Enter your password" autocomplete="current-password" required>
-                    <span class="password-toggle" onclick="togglePassword()">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="#6c757d" class="bi bi-eye"
-                            viewBox="0 0 16 16">
-                            <path
-                                d="M16 8s-3-5.5-8-5.5S0 8 0 8s3 5.5 8 5.5S16 8 16 8zM1.173 8a13.133 13.133 0 0 1 1.66-2.043C4.12 4.668 5.88 3.5 8 3.5s3.879 1.168 5.168 2.457A13.133 13.133 0 0 1 14.828 8c-.058.087-.122.183-.195.288-.335.48-.83 1.12-1.465 1.755C11.879 11.332 10.119 12.5 8 12.5c-2.12 0-3.879-1.168-5.168-2.457A13.134 13.134 0 0 1 1.172 8z" />
-                            <path
-                                d="M8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM4.5 8a3.5 3.5 0 1 1 7 0 3.5 3.5 0 0 1-7 0z" />
-                        </svg>
-                    </span>
-                </div>
-                <div class="d-grid">
-                    <button type="submit" class="btn btn-primary">Log In</button>
-                </div>
-            </form>
+<body data-error="{{ 'true' if request.args.get('error') == '1' else 'false' }}">
+  <div class="auth-shell">
+    <section class="auth-hero">
+      <div class="hero-brand">
+        <div class="hero-brand-icon">
+          <i class="fas fa-brain"></i>
         </div>
+        NeuroSense
+      </div>
+
+      <div class="hero-headline">
+        <h1>Connected care intelligence, one secure sign-in away.</h1>
+        <p>NeuroSense unifies live sensor signals, patient narratives, and predictive mood modeling so your team can anticipate needs—not just react to them.</p>
+      </div>
+
+      <ul class="hero-features">
+        <li class="hero-feature">
+          <span class="hero-feature-icon"><i class="fas fa-wave-square"></i></span>
+          Real-time telemetry and mood variance scoring streamed directly into each patient profile.
+        </li>
+        <li class="hero-feature">
+          <span class="hero-feature-icon"><i class="fas fa-user-shield"></i></span>
+          Role-aware dashboards ensure super admins, facility leaders, and staff see exactly what they need.
+        </li>
+        <li class="hero-feature">
+          <span class="hero-feature-icon"><i class="fas fa-robot"></i></span>
+          Built-in AI assistant to summarize trends, surface anomalies, and answer triage questions instantly.
+        </li>
+      </ul>
+
+      <div class="hero-insight">
+        <div class="hero-insight-card">
+          <div>
+            <span>Average patient stability</span>
+            <strong>87%</strong>
+          </div>
+          <div>
+            <span>Alerts resolved today</span>
+            <strong class="text-success">42</strong>
+          </div>
+        </div>
+        <div class="hero-mini">
+          <i class="fas fa-lock"></i>
+          We exceed HIPAA expectations with encrypted storage, audit trails, and contextual access controls.
+        </div>
+      </div>
+    </section>
+
+    <section class="auth-panel">
+      <div class="panel-card">
+        <header class="panel-header">
+          <span class="panel-badge"><i class="fas fa-shield-alt"></i> Secure Access</span>
+          <h2>Sign in to NeuroSense</h2>
+          <p>Authenticate with your facility credentials to manage dashboards, patients, and timely interventions.</p>
+        </header>
+
+        <div id="errorBanner" class="error-banner">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2a10 10 0 1 0 10 10A10.011 10.011 0 0 0 12 2Zm0 5a1.25 1.25 0 1 1-1.25 1.25A1.25 1.25 0 0 1 12 7Zm1 10h-2v-6h2Z" />
+          </svg>
+          Invalid email or password. <a href="#" data-bs-toggle="modal" data-bs-target="#requestAccessModal">Request access</a>
+        </div>
+
+        <form action="{{ url_for('login') }}" method="POST" class="form-stack" novalidate>
+          <div>
+            <label for="email" class="form-label">Email address</label>
+            <div class="input-wrapper">
+              <input type="email" id="email" name="email" placeholder="care.team@example.com" autocomplete="username" required value="{{ request.args.get('email', '') }}" />
+            </div>
+          </div>
+
+          <div>
+            <label for="password" class="form-label">Password</label>
+            <div class="input-wrapper">
+              <input type="password" id="password" name="password" placeholder="Enter your password" autocomplete="current-password" required />
+              <button type="button" class="password-toggle" aria-label="Toggle password visibility" id="togglePassword">
+                <i class="fas fa-eye"></i>
+              </button>
+            </div>
+            <div class="form-meta">
+              <label>
+                <input class="form-check-input me-2" type="checkbox" name="remember" />
+                Keep me signed in on this device
+              </label>
+              <a href="#" data-bs-toggle="modal" data-bs-target="#forgotPasswordModal">Forgot password?</a>
+            </div>
+          </div>
+
+          <button type="submit" class="btn-primary">
+            <span>Enter Dashboard</span>
+            <i class="fas fa-arrow-right"></i>
+          </button>
+        </form>
+
+        <div class="support-links">
+          <span>Need help? <a href="#" data-bs-toggle="modal" data-bs-target="#requestAccessModal">Request sandbox access</a></span>
+          <span><a href="#" data-bs-toggle="modal" data-bs-target="#forgotPasswordModal">Password assistance</a></span>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="demo-credentials">
+          <strong>Demo Access</strong>
+          <span>Use the sandbox credentials below to explore NeuroSense without touching production data.</span>
+          <div>Email: <code>demo@example.com</code></div>
+          <div>Password: <code>password123</code></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast-container position-fixed top-0 end-0 p-3" id="loginToastContainer" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Request Access Modal -->
+  <div class="modal fade" id="requestAccessModal" tabindex="-1" aria-labelledby="requestAccessModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="requestAccessModalLabel"><i class="fas fa-user-plus me-2 text-primary"></i>Request NeuroSense access</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form id="requestAccessForm" class="modal-body form-stack">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label" for="accessName">Full name</label>
+              <input class="form-control" id="accessName" name="name" type="text" placeholder="Jordan Lee" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="accessEmail">Work email</label>
+              <input class="form-control" id="accessEmail" name="email" type="email" placeholder="jordan.lee@facility.org" required>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="accessFacility">Facility or organization</label>
+              <input class="form-control" id="accessFacility" name="facility" type="text" placeholder="Aurora Health Network">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="accessRole">Clinical role (optional)</label>
+              <input class="form-control" id="accessRole" name="role" type="text" placeholder="Nurse manager, telehealth lead">
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="accessGoal">What would you like to accomplish?</label>
+              <input class="form-control" id="accessGoal" name="goal" type="text" placeholder="Pilot remote monitoring for post-op patients">
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="accessMessage">Anything else we should know?</label>
+              <textarea class="form-control" id="accessMessage" name="message" rows="3" placeholder="Share timelines, integrations, or team size expectations."></textarea>
+            </div>
+          </div>
+          <div class="d-flex justify-content-end gap-2 mt-2">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" data-loading-text="Submitting...">Submit request</button>
+          </div>
+        </form>
+      </div>
     </div>
+  </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // Error message handling
-        (function () {
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.get('error') === '1') {
-                document.getElementById('errorMsg').classList.remove('d-none');
-            }
-        })();
+  <!-- Forgot Password Modal -->
+  <div class="modal fade" id="forgotPasswordModal" tabindex="-1" aria-labelledby="forgotPasswordModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="forgotPasswordModalLabel"><i class="fas fa-key me-2 text-primary"></i>Password assistance</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <form id="forgotPasswordForm" class="modal-body form-stack">
+          <p class="text-muted mb-2">Tell us where to reach you and we'll coordinate a secure reset with your facility administrator.</p>
+          <div class="form-stack">
+            <div>
+              <label class="form-label" for="forgotEmail">Account email</label>
+              <input class="form-control" id="forgotEmail" name="email" type="email" placeholder="care.team@example.com" required>
+            </div>
+            <div>
+              <label class="form-label" for="forgotName">Your name (optional)</label>
+              <input class="form-control" id="forgotName" name="name" type="text" placeholder="Jordan Lee">
+            </div>
+            <div>
+              <label class="form-label" for="forgotContact">Preferred contact method</label>
+              <input class="form-control" id="forgotContact" name="contact" type="text" placeholder="Mobile number or secure email">
+            </div>
+            <div>
+              <label class="form-label" for="forgotNotes">Context for support (optional)</label>
+              <textarea class="form-control" id="forgotNotes" name="notes" rows="3" placeholder="Include facility, shift, or urgency details."></textarea>
+            </div>
+          </div>
+          <div class="d-flex justify-content-end gap-2 mt-2">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" data-loading-text="Sending...">Notify support</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
 
-        // Password visibility toggle
-        function togglePassword() {
-            const passwordField = document.getElementById('password');
-            const icon = document.querySelector('.password-toggle svg');
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    (function () {
+      const banner = document.getElementById('errorBanner');
+      const hasError = document.body.dataset.error === 'true';
+      if (hasError && banner) {
+        banner.classList.add('is-visible');
+      }
+    }());
 
-            if (passwordField.type === 'password') {
-                passwordField.type = 'text';
-                icon.classList.replace('bi-eye', 'bi-eye-slash');
-            } else {
-                passwordField.type = 'password';
-                icon.classList.replace('bi-eye-slash', 'bi-eye');
-            }
+    (function () {
+      const toggle = document.getElementById('togglePassword');
+      const input = document.getElementById('password');
+      if (!toggle || !input) return;
+      toggle.addEventListener('click', () => {
+        const isPassword = input.type === 'password';
+        input.type = isPassword ? 'text' : 'password';
+        toggle.querySelector('i').classList.toggle('fa-eye');
+        toggle.querySelector('i').classList.toggle('fa-eye-slash');
+        input.focus({ preventScroll: true });
+      });
+    }());
+
+    (function () {
+      const toastContainer = document.getElementById('loginToastContainer');
+      function showToast(config) {
+        const { title = 'Notice', message = '', variant = 'success' } = config || {};
+        if (!toastContainer) {
+          console.log(`[toast:${variant}] ${title}: ${message}`);
+          return;
         }
-    </script>
+        const wrapper = document.createElement('div');
+        wrapper.className = `toast align-items-center text-bg-${variant === 'error' ? 'danger' : 'primary'} border-0`;
+        wrapper.setAttribute('role', 'status');
+        wrapper.setAttribute('aria-live', 'polite');
+        wrapper.setAttribute('aria-atomic', 'true');
+        wrapper.innerHTML = `
+          <div class="d-flex">
+            <div class="toast-body">
+              <strong class="d-block">${title}</strong>
+              <span>${message}</span>
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+          </div>
+        `;
+        toastContainer.appendChild(wrapper);
+        const toast = new bootstrap.Toast(wrapper, { delay: 4000 });
+        toast.show();
+        wrapper.addEventListener('hidden.bs.toast', () => {
+          wrapper.remove();
+        });
+      }
+
+      async function submitSupportForm(formId, endpoint, successMessage) {
+        const form = document.getElementById(formId);
+        if (!form) return;
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const submitLabel = submitBtn?.innerText;
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          if (!submitBtn) return;
+          submitBtn.disabled = true;
+          const loadingText = submitBtn.dataset.loadingText || 'Submitting...';
+          submitBtn.innerText = loadingText;
+          try {
+            const formData = new FormData(form);
+            const payload = Object.fromEntries(formData.entries());
+            const resp = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            if (!resp.ok) {
+              const detail = await resp.json().catch(() => ({}));
+              throw new Error(detail.error || 'Request failed');
+            }
+            form.reset();
+            const modalEl = bootstrap.Modal.getInstance(form.closest('.modal'));
+            modalEl?.hide();
+            showToast({ title: 'Support notified', message: successMessage, variant: 'success' });
+          } catch (err) {
+            console.error(err);
+            showToast({ title: 'Unable to submit', message: err.message || 'Please try again shortly.', variant: 'error' });
+          } finally {
+            submitBtn.disabled = false;
+            if (submitLabel) {
+              submitBtn.innerText = submitLabel;
+            }
+          }
+        });
+      }
+
+      submitSupportForm('requestAccessForm', '/support/request-access', 'Our team will reach out within one business day.');
+      submitSupportForm('forgotPasswordForm', '/support/forgot-password', 'The care operations team will coordinate your reset shortly.');
+    }());
+  </script>
+</body>
 
 </html>
