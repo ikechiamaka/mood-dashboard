@@ -665,6 +665,20 @@ def db_insert_bed(item_id: str, name: str, room: str, patient: str, facility_id:
     return _row_to_dict(cur.fetchone())
 
 
+def db_get_bed(item_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute('SELECT * FROM beds WHERE id = ?', (item_id,))
+    row = cur.fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def db_delete_bed(item_id: str) -> bool:
+    conn = get_conn()
+    cur = conn.execute('DELETE FROM beds WHERE id = ?', (item_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def db_list_schedule(facility_id: Optional[int]) -> List[Dict[str, Any]]:
     conn = get_conn()
     if facility_id is None:
@@ -684,6 +698,20 @@ def db_insert_schedule(item_id: str, name: str, start: str, end: str, days: List
     conn.commit()
     cur = conn.execute('SELECT * FROM schedule WHERE id=?', (item_id,))
     return _row_to_dict(cur.fetchone(), json_cols=('days','staff_ids'))
+
+
+def db_get_schedule(item_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute('SELECT * FROM schedule WHERE id = ?', (item_id,))
+    row = cur.fetchone()
+    return _row_to_dict(row, json_cols=('days','staff_ids')) if row else None
+
+
+def db_delete_schedule(item_id: str) -> bool:
+    conn = get_conn()
+    cur = conn.execute('DELETE FROM schedule WHERE id = ?', (item_id,))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # ---- Clinical logs helpers ----

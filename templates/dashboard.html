@@ -37,41 +37,51 @@
 <!-- Main Content -->
 <div class="main-content">
   <nav class="navbar navbar-expand-lg px-4" id="dashboardTop">
-    <button class="btn btn-outline-primary d-lg-none me-2" type="button" id="sidebarToggle" aria-label="Toggle navigation" aria-controls="sidebarNav" aria-expanded="false">
-      <i class="fas fa-bars"></i>
-    </button>
-    <a class="navbar-brand" href="#"><i class="fas fa-brain me-2"></i><span>NeuroSense Dashboard</span></a>
-    <div class="navbar-actions flex-wrap">
-      {% if show_role_switcher %}
-      <div id="roleSwitcherContainer" class="dropdown me-3">
-        <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" id="roleDropdown"
-          data-bs-toggle="dropdown">
-          <i class="fas fa-user-shield me-1"></i> Switch Role
-        </button>
-        <ul class="dropdown-menu">
-          <li><a class="dropdown-item role-switcher-item" href="#" data-role="super_admin">Super Administrator</a></li>
-          <li><a class="dropdown-item role-switcher-item" href="#" data-role="facility_admin">Facility Admin</a></li>
-          <li><a class="dropdown-item role-switcher-item" href="#" data-role="staff">Staff Provider</a></li>
-        </ul>
+    <div class="navbar-main">
+      <button class="btn btn-outline-primary d-lg-none navbar-icon-btn" type="button" id="sidebarToggle" aria-label="Toggle navigation" aria-controls="sidebarNav" aria-expanded="false">
+        <i class="fas fa-bars"></i>
+      </button>
+      <a class="navbar-brand" href="#"><i class="fas fa-brain me-2"></i><span>NeuroSense Dashboard</span></a>
+    </div>
+    <div class="navbar-controls">
+      <div class="navbar-controls-left">
+        <div class="theme-toggle">
+          <input class="theme-toggle-input" id="themeSwitch" type="checkbox" />
+          <label class="theme-toggle-label" for="themeSwitch">
+            <span class="theme-toggle-icon sun"><i class="fas fa-sun"></i></span>
+            <span class="theme-toggle-icon moon"><i class="fas fa-moon"></i></span>
+            <span class="theme-toggle-handle"></span>
+            <span class="visually-hidden">Toggle dark mode</span>
+          </label>
+        </div>
+        {% if show_role_switcher %}
+        <div id="roleSwitcherContainer" class="dropdown">
+          <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" id="roleDropdown"
+            data-bs-toggle="dropdown">
+            <i class="fas fa-user-shield me-1"></i> Switch Role
+          </button>
+          <ul class="dropdown-menu">
+            <li><a class="dropdown-item role-switcher-item" href="#" data-role="super_admin">Super Administrator</a></li>
+            <li><a class="dropdown-item role-switcher-item" href="#" data-role="facility_admin">Facility Admin</a></li>
+            <li><a class="dropdown-item role-switcher-item" href="#" data-role="staff">Staff Provider</a></li>
+          </ul>
+        </div>
+        {% endif %}
       </div>
-      {% endif %}
-      <div class="form-check form-switch me-3">
-        <input class="form-check-input" id="themeSwitch" type="checkbox" />
-        <label class="form-check-label" for="themeSwitch">Dark Mode</label>
-      </div>
-      
-      <div class="dropdown">
-        <button class="btn btn-sm btn-primary dropdown-toggle d-flex align-items-center" type="button"
-          id="profileDropdown" data-bs-toggle="dropdown">
-          <img id="currentUserAvatar" src="{{ url_for('static', filename='pic.jpg') }}" class="rounded-circle me-2"
-            style="width:30px;height:30px;object-fit:cover;" />
-          <span id="currentUserName">Blaine Cottrell</span>
-        </button>
-        <div class="dropdown-menu dropdown-menu-end">
-          <a class="dropdown-item" id="profileViewLink" href="#"><i class="fas fa-user me-2"></i>Profile</a>
-          <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#settingsModal">Settings</a>
-          <div class="dropdown-divider"></div>
-          <a class="dropdown-item" href="/logout"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
+      <div class="navbar-controls-right">
+        <div class="dropdown">
+          <button class="btn btn-sm btn-primary dropdown-toggle d-flex align-items-center profile-btn" type="button"
+            id="profileDropdown" data-bs-toggle="dropdown">
+            <img id="currentUserAvatar" src="{{ url_for('static', filename='pic.jpg') }}" class="rounded-circle me-2"
+              style="width:30px;height:30px;object-fit:cover;" />
+            <span id="currentUserName">Blaine Cottrell</span>
+          </button>
+          <div class="dropdown-menu dropdown-menu-end">
+            <a class="dropdown-item" id="profileViewLink" href="#"><i class="fas fa-user me-2"></i>Profile</a>
+            <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#settingsModal">Settings</a>
+            <div class="dropdown-divider"></div>
+            <a class="dropdown-item" href="/logout"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
+          </div>
         </div>
       </div>
     </div>

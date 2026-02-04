@@ -626,6 +626,7 @@ function renderStaff(items){
   (items||[]).forEach(s=>{
     const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
     const span = document.createElement('span');
+    span.className = 'admin-list-text';
     const strong = document.createElement('strong');
     strong.textContent = s?.name || '';
     span.appendChild(strong);
@@ -638,7 +639,23 @@ function renderStaff(items){
     if(s?.phone){
       span.appendChild(document.createTextNode(` | ${s.phone}`));
     }
+    const actions = document.createElement('div');
+    actions.className = 'admin-list-actions';
+    if(s?.id){
+      const del = document.createElement('button');
+      del.className = 'btn btn-sm btn-outline-danger';
+      del.innerHTML = '<i class="fas fa-trash"></i>';
+      del.title = 'Delete staff';
+      del.addEventListener('click', async () => {
+        if(confirm('Delete staff contact?')){
+          await apiDelete(`/api/staff/${encodeURIComponent(s.id)}`);
+          loadStaff();
+        }
+      });
+      actions.appendChild(del);
+    }
     li.appendChild(span);
+    li.appendChild(actions);
     ul.appendChild(li);
   });
 }
@@ -656,7 +673,26 @@ function renderBeds(items){
   (items || []).forEach(b => {
     const li = document.createElement('li');
     li.className = 'list-group-item d-flex justify-content-between align-items-center';
-    li.textContent = [b.name, b.room ? `Room ${b.room}` : null, b.patient ? `Patient: ${b.patient}` : null].filter(Boolean).join(' | ');
+    const text = document.createElement('span');
+    text.className = 'admin-list-text';
+    text.textContent = [b.name, b.room ? `Room ${b.room}` : null, b.patient ? `Patient: ${b.patient}` : null].filter(Boolean).join(' | ');
+    const actions = document.createElement('div');
+    actions.className = 'admin-list-actions';
+    if(b?.id){
+      const del = document.createElement('button');
+      del.className = 'btn btn-sm btn-outline-danger';
+      del.innerHTML = '<i class="fas fa-trash"></i>';
+      del.title = 'Delete bed';
+      del.addEventListener('click', async () => {
+        if(confirm('Delete bed?')){
+          await apiDelete(`/api/beds/${encodeURIComponent(b.id)}`);
+          loadBeds();
+        }
+      });
+      actions.appendChild(del);
+    }
+    li.appendChild(text);
+    li.appendChild(actions);
     list.appendChild(li);
   });
 }
@@ -695,27 +731,46 @@ async function loadShifts(){ try{ const list = await apiGet('/api/schedule'); re
 function renderShifts(items){
   const ul = document.getElementById('shiftsList'); if(!ul) return; ul.innerHTML='';
   (items||[]).forEach(sh=>{
-    const li = document.createElement('li'); li.className='list-group-item';
+    const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
+    const text = document.createElement('span');
+    text.className = 'admin-list-text';
     const days = (sh.days||[]).join(',');
     const name = document.createElement('strong');
     name.textContent = sh?.name || '';
-    li.appendChild(name);
-    li.appendChild(document.createTextNode(` | ${sh?.start || ''}-${sh?.end || ''} | days [${days}]`));
-    li.appendChild(document.createElement('br'));
-    li.appendChild(document.createTextNode('staff: '));
+    text.appendChild(name);
+    text.appendChild(document.createTextNode(` | ${sh?.start || ''}-${sh?.end || ''} | days [${days}]`));
+    text.appendChild(document.createElement('br'));
+    text.appendChild(document.createTextNode('staff: '));
     const staffIds = Array.isArray(sh?.staff_ids) ? sh.staff_ids : [];
     if(!staffIds.length){
-      li.appendChild(document.createTextNode('none'));
+      text.appendChild(document.createTextNode('none'));
     }else{
       staffIds.forEach((id, idx) => {
         const code = document.createElement('code');
         code.textContent = String(id);
-        li.appendChild(code);
+        text.appendChild(code);
         if(idx < staffIds.length - 1){
-          li.appendChild(document.createTextNode(', '));
+          text.appendChild(document.createTextNode(', '));
         }
       });
     }
+    const actions = document.createElement('div');
+    actions.className = 'admin-list-actions';
+    if(sh?.id){
+      const del = document.createElement('button');
+      del.className = 'btn btn-sm btn-outline-danger';
+      del.innerHTML = '<i class="fas fa-trash"></i>';
+      del.title = 'Delete shift';
+      del.addEventListener('click', async () => {
+        if(confirm('Delete shift?')){
+          await apiDelete(`/api/schedule/${encodeURIComponent(sh.id)}`);
+          loadShifts();
+        }
+      });
+      actions.appendChild(del);
+    }
+    li.appendChild(text);
+    li.appendChild(actions);
     ul.appendChild(li);
   });
 }
@@ -822,8 +877,28 @@ function renderBeds(items){
   const ul = document.getElementById('bedsList'); if(!ul) return; ul.innerHTML='';
   (items||[]).forEach(b=>{
     const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
+    const text = document.createElement('span');
+    text.className = 'admin-list-text';
     const meta = [b.name, b.room?`Room ${b.room}`:null, b.patient?`Patient: ${b.patient}`:null].filter(Boolean).join(' | ');
-    li.textContent = `${meta}`; ul.appendChild(li);
+    text.textContent = `${meta}`;
+    const actions = document.createElement('div');
+    actions.className = 'admin-list-actions';
+    if(b?.id){
+      const del = document.createElement('button');
+      del.className = 'btn btn-sm btn-outline-danger';
+      del.innerHTML = '<i class="fas fa-trash"></i>';
+      del.title = 'Delete bed';
+      del.addEventListener('click', async () => {
+        if(confirm('Delete bed?')){
+          await apiDelete(`/api/beds/${encodeURIComponent(b.id)}`);
+          loadBeds();
+        }
+      });
+      actions.appendChild(del);
+    }
+    li.appendChild(text);
+    li.appendChild(actions);
+    ul.appendChild(li);
   });
 }
 function renderStaff(items){
@@ -831,6 +906,7 @@ function renderStaff(items){
   (items||[]).forEach(s=>{
     const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
     const span = document.createElement('span');
+    span.className = 'admin-list-text';
     const strong = document.createElement('strong');
     strong.textContent = s?.name || '';
     span.appendChild(strong);
@@ -843,34 +919,69 @@ function renderStaff(items){
     if(s?.phone){
       span.appendChild(document.createTextNode(` | ${s.phone}`));
     }
+    const actions = document.createElement('div');
+    actions.className = 'admin-list-actions';
+    if(s?.id){
+      const del = document.createElement('button');
+      del.className = 'btn btn-sm btn-outline-danger';
+      del.innerHTML = '<i class="fas fa-trash"></i>';
+      del.title = 'Delete staff';
+      del.addEventListener('click', async () => {
+        if(confirm('Delete staff contact?')){
+          await apiDelete(`/api/staff/${encodeURIComponent(s.id)}`);
+          loadStaff();
+        }
+      });
+      actions.appendChild(del);
+    }
     li.appendChild(span);
+    li.appendChild(actions);
     ul.appendChild(li);
   });
 }
 function renderShifts(items){
   const ul = document.getElementById('shiftsList'); if(!ul) return; ul.innerHTML='';
   (items||[]).forEach(sh=>{
-    const li = document.createElement('li'); li.className='list-group-item';
+    const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
+    const text = document.createElement('span');
+    text.className = 'admin-list-text';
     const days = (sh.days||[]).join(',');
     const name = document.createElement('strong');
     name.textContent = sh?.name || '';
-    li.appendChild(name);
-    li.appendChild(document.createTextNode(` | ${sh?.start || ''}-${sh?.end || ''} | days [${days}]`));
-    li.appendChild(document.createElement('br'));
-    li.appendChild(document.createTextNode('staff: '));
+    text.appendChild(name);
+    text.appendChild(document.createTextNode(` | ${sh?.start || ''}-${sh?.end || ''} | days [${days}]`));
+    text.appendChild(document.createElement('br'));
+    text.appendChild(document.createTextNode('staff: '));
     const staffIds = Array.isArray(sh?.staff_ids) ? sh.staff_ids : [];
     if(!staffIds.length){
-      li.appendChild(document.createTextNode('none'));
+      text.appendChild(document.createTextNode('none'));
     }else{
       staffIds.forEach((id, idx) => {
         const code = document.createElement('code');
         code.textContent = String(id);
-        li.appendChild(code);
+        text.appendChild(code);
         if(idx < staffIds.length - 1){
-          li.appendChild(document.createTextNode(', '));
+          text.appendChild(document.createTextNode(', '));
         }
       });
     }
+    const actions = document.createElement('div');
+    actions.className = 'admin-list-actions';
+    if(sh?.id){
+      const del = document.createElement('button');
+      del.className = 'btn btn-sm btn-outline-danger';
+      del.innerHTML = '<i class="fas fa-trash"></i>';
+      del.title = 'Delete shift';
+      del.addEventListener('click', async () => {
+        if(confirm('Delete shift?')){
+          await apiDelete(`/api/schedule/${encodeURIComponent(sh.id)}`);
+          loadShifts();
+        }
+      });
+      actions.appendChild(del);
+    }
+    li.appendChild(text);
+    li.appendChild(actions);
     ul.appendChild(li);
   });
 }
@@ -1227,7 +1338,7 @@ function renderJournal(items){
   const entries = Array.isArray(items) ? items : [];
   entries.forEach(entry => {
     const li = document.createElement('li');
-    li.className = 'list-group-item';
+    li.className = 'list-group-item journal-entry';
     const ts = entry.timestamp ? new Date(entry.timestamp) : null;
     const subtitle = ts && !Number.isNaN(ts.getTime()) ? ts.toLocaleString() : 'Journal entry';
     const titleRow = document.createElement('div');

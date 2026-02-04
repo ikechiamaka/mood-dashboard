@@ -33,8 +33,12 @@ from db import (
     db_delete_staff,
     db_list_beds,
     db_insert_bed,
+    db_get_bed,
+    db_delete_bed,
     db_list_schedule,
     db_insert_schedule,
+    db_get_schedule,
+    db_delete_schedule,
     db_list_patients,
     db_get_patient_by_id,
     db_insert_patient,
@@ -1527,6 +1531,24 @@ def beds_api():
     return jsonify(item), 201
 
 
+@app.route('/api/beds/<bed_id>', methods=['DELETE'])
+def bed_delete(bed_id: str):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if session.get('role') not in ('super_admin', 'facility_admin'):
+        return jsonify({'error': 'Forbidden'}), 403
+    target = db_get_bed(bed_id)
+    if not target:
+        return jsonify({'error': 'Not found'}), 404
+    if session.get('role') == 'facility_admin':
+        if target.get('facility_id') != session.get('facility_id'):
+            return jsonify({'error': 'Forbidden'}), 403
+    ok = db_delete_bed(bed_id)
+    if ok:
+        _audit_event('delete_bed', bed_id)
+    return jsonify({'status': 'deleted' if ok else 'not_found'})
+
+
 @app.route('/api/schedule', methods=['GET', 'POST'])
 def schedule_api():
     if 'user' not in session:
@@ -1571,6 +1593,24 @@ def schedule_api():
     item = db_insert_schedule(str(uuid4()), name, start, end, days, staff_ids, fid)
     _audit_event('create_schedule', item.get('id'))
     return jsonify(item), 201
+
+
+@app.route('/api/schedule/<schedule_id>', methods=['DELETE'])
+def schedule_delete(schedule_id: str):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if session.get('role') not in ('super_admin', 'facility_admin'):
+        return jsonify({'error': 'Forbidden'}), 403
+    target = db_get_schedule(schedule_id)
+    if not target:
+        return jsonify({'error': 'Not found'}), 404
+    if session.get('role') == 'facility_admin':
+        if target.get('facility_id') != session.get('facility_id'):
+            return jsonify({'error': 'Forbidden'}), 403
+    ok = db_delete_schedule(schedule_id)
+    if ok:
+        _audit_event('delete_schedule', schedule_id)
+    return jsonify({'status': 'deleted' if ok else 'not_found'})
 
 
 def _hhmm_to_minutes(s: str) -> int:
