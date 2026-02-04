@@ -2,7 +2,6 @@ import os
 import json
 import sqlite3
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus
 from typing import Any, Dict, List, Optional, Tuple
 
 DB_DIR = os.path.join(os.path.dirname(__file__), 'data')
@@ -39,9 +38,11 @@ def init_db() -> None:
         _set_user_version(conn, 1)
         conn.commit()
         _maybe_seed_from_env(conn)
+        _maybe_import_legacy_logs(conn)
     else:
         # Ensure any newly added tables exist for older DBs
         _ensure_schema_compat(conn)
+        _maybe_import_legacy_logs(conn)
         conn.commit()
     # Future migrations: if v < 2: ...
 
@@ -117,6 +118,82 @@ def _create_schema_v1(conn: sqlite3.Connection) -> None:
         );
 
         CREATE INDEX IF NOT EXISTS idx_readings_bed_ts ON readings (bed_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS checkins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            patient_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            mood INTEGER,
+            stress TEXT,
+            notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_checkins_patient_ts ON checkins (patient_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS journal_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            patient_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            mood INTEGER,
+            text TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_journal_patient_ts ON journal_entries (patient_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS goals (
+            id TEXT PRIMARY KEY,
+            patient_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL,
+            due_date TEXT,
+            notify INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_goals_patient_created ON goals (patient_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER,
+            timestamp TEXT NOT NULL,
+            predicted_mood INTEGER,
+            temperature REAL,
+            humidity REAL,
+            mq2 TEXT,
+            bh1750fvi REAL,
+            radar INTEGER,
+            ultrasonic REAL,
+            song INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_predictions_patient_ts ON predictions (patient_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS support_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            email TEXT NOT NULL,
+            name TEXT,
+            facility TEXT,
+            role TEXT,
+            goal TEXT,
+            message TEXT,
+            contact TEXT,
+            notes TEXT,
+            user_agent TEXT,
+            submitted_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT,
+            action TEXT NOT NULL,
+            target TEXT,
+            details TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         '''
     )
     _ensure_patient_columns(conn)
@@ -232,6 +309,82 @@ def _ensure_schema_compat(conn: sqlite3.Connection) -> None:
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE INDEX IF NOT EXISTS idx_readings_bed_ts ON readings (bed_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS checkins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            patient_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            mood INTEGER,
+            stress TEXT,
+            notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_checkins_patient_ts ON checkins (patient_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS journal_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            patient_id INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            mood INTEGER,
+            text TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_journal_patient_ts ON journal_entries (patient_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS goals (
+            id TEXT PRIMARY KEY,
+            patient_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL,
+            due_date TEXT,
+            notify INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            created_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_goals_patient_created ON goals (patient_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER,
+            timestamp TEXT NOT NULL,
+            predicted_mood INTEGER,
+            temperature REAL,
+            humidity REAL,
+            mq2 TEXT,
+            bh1750fvi REAL,
+            radar INTEGER,
+            ultrasonic REAL,
+            song INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_predictions_patient_ts ON predictions (patient_id, timestamp DESC);
+
+        CREATE TABLE IF NOT EXISTS support_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            email TEXT NOT NULL,
+            name TEXT,
+            facility TEXT,
+            role TEXT,
+            goal TEXT,
+            message TEXT,
+            contact TEXT,
+            notes TEXT,
+            user_agent TEXT,
+            submitted_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT,
+            action TEXT NOT NULL,
+            target TEXT,
+            details TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
         '''
     )
     _ensure_patient_columns(conn)
@@ -387,7 +540,7 @@ def _maybe_seed_from_env(conn: sqlite3.Connection) -> None:
             }
         ]
         for p in demo_patients:
-            avatar = p.get('avatar_url') or f"https://ui-avatars.com/api/?background=4e73df&color=fff&name={quote_plus(p['name'])}"
+            avatar = p.get('avatar_url') or '/static/pic.jpg'
             cur = conn.execute(
                 'INSERT INTO patients (name, facility_id, bed_id, age, risk_level, primary_condition, allergies, care_focus, avatar_url) VALUES (?,?,?,?,?,?,?,?,?)',
                 (
@@ -533,6 +686,154 @@ def db_insert_schedule(item_id: str, name: str, start: str, end: str, days: List
     return _row_to_dict(cur.fetchone(), json_cols=('days','staff_ids'))
 
 
+# ---- Clinical logs helpers ----
+def db_list_checkins(patient_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute(
+        'SELECT user, patient_id, timestamp, mood, stress, notes FROM checkins WHERE patient_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?',
+        (patient_id, limit)
+    )
+    return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def db_insert_checkin(user: str, patient_id: int, timestamp: str, mood: Optional[int], stress: Optional[str], notes: Optional[str]) -> None:
+    conn = get_conn()
+    conn.execute(
+        'INSERT INTO checkins (user, patient_id, timestamp, mood, stress, notes) VALUES (?,?,?,?,?,?)',
+        (user, patient_id, timestamp, mood, stress, notes)
+    )
+    conn.commit()
+
+
+def db_list_journal_entries(patient_id: int, limit: int = 50) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute(
+        'SELECT user, patient_id, timestamp, mood, text FROM journal_entries WHERE patient_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?',
+        (patient_id, limit)
+    )
+    return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def db_insert_journal_entry(user: str, patient_id: int, timestamp: str, mood: Optional[int], text: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        'INSERT INTO journal_entries (user, patient_id, timestamp, mood, text) VALUES (?,?,?,?,?)',
+        (user, patient_id, timestamp, mood, text)
+    )
+    conn.commit()
+
+
+def db_list_goals(patient_id: int) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute(
+        'SELECT * FROM goals WHERE patient_id = ? ORDER BY created_at DESC',
+        (patient_id,)
+    )
+    return [_row_to_dict(r) for r in cur.fetchall()]
+
+
+def db_get_goal(goal_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute('SELECT * FROM goals WHERE id = ?', (goal_id,))
+    row = cur.fetchone()
+    return _row_to_dict(row) if row else None
+
+
+def db_insert_goal(
+    goal_id: str,
+    patient_id: int,
+    title: str,
+    status: str,
+    due_date: Optional[str],
+    notify: int,
+    created_at: str,
+    updated_at: str,
+    created_by: Optional[str],
+) -> Dict[str, Any]:
+    conn = get_conn()
+    conn.execute(
+        'INSERT INTO goals (id, patient_id, title, status, due_date, notify, created_at, updated_at, created_by) VALUES (?,?,?,?,?,?,?,?,?)',
+        (goal_id, patient_id, title, status, due_date, notify, created_at, updated_at, created_by)
+    )
+    conn.commit()
+    return db_get_goal(goal_id) or {}
+
+
+def db_update_goal(goal_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    allowed = {'status', 'title', 'due_date', 'notify', 'updated_at'}
+    sets = []
+    vals: List[Any] = []
+    for k, v in updates.items():
+        if k not in allowed:
+            continue
+        sets.append(f'{k} = ?')
+        vals.append(v)
+    if not sets:
+        return db_get_goal(goal_id)
+    vals.append(goal_id)
+    conn = get_conn()
+    conn.execute(f'UPDATE goals SET {", ".join(sets)} WHERE id = ?', tuple(vals))
+    conn.commit()
+    return db_get_goal(goal_id)
+
+
+def db_delete_goal(goal_id: str) -> bool:
+    conn = get_conn()
+    cur = conn.execute('DELETE FROM goals WHERE id = ?', (goal_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def db_insert_prediction(
+    patient_id: Optional[int],
+    timestamp: str,
+    predicted_mood: Optional[int],
+    temperature: Optional[float],
+    humidity: Optional[float],
+    mq2: Optional[str],
+    bh1750fvi: Optional[float],
+    radar: Optional[int],
+    ultrasonic: Optional[float],
+    song: Optional[int],
+) -> None:
+    conn = get_conn()
+    conn.execute(
+        'INSERT INTO predictions (patient_id, timestamp, predicted_mood, temperature, humidity, mq2, bh1750fvi, radar, ultrasonic, song) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        (patient_id, timestamp, predicted_mood, temperature, humidity, mq2, bh1750fvi, radar, ultrasonic, song)
+    )
+    conn.commit()
+
+
+def db_insert_support_request(
+    kind: str,
+    email: str,
+    name: Optional[str],
+    facility: Optional[str],
+    role: Optional[str],
+    goal: Optional[str],
+    message: Optional[str],
+    contact: Optional[str],
+    notes: Optional[str],
+    user_agent: Optional[str],
+    submitted_at: str,
+) -> None:
+    conn = get_conn()
+    conn.execute(
+        'INSERT INTO support_requests (kind, email, name, facility, role, goal, message, contact, notes, user_agent, submitted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        (kind, email, name, facility, role, goal, message, contact, notes, user_agent, submitted_at)
+    )
+    conn.commit()
+
+
+def db_insert_audit_event(user: Optional[str], action: str, target: Optional[str], details: Optional[str]) -> None:
+    conn = get_conn()
+    conn.execute(
+        'INSERT INTO audit_events (user, action, target, details) VALUES (?,?,?,?)',
+        (user, action, target, details)
+    )
+    conn.commit()
+
+
 # ---- Patients helpers ----
 def db_list_patients(facility_id: Optional[int] = None, allowed_ids: Optional[List[int]] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
@@ -578,7 +879,7 @@ def db_insert_patient(
 ) -> Dict[str, Any]:
     conn = get_conn()
     _ensure_patient_columns(conn)
-    resolved_avatar = avatar_url or (f"https://ui-avatars.com/api/?background=4e73df&color=fff&name={quote_plus(str(name))}" if name else None)
+    resolved_avatar = avatar_url or '/static/pic.jpg'
     conn.execute(
         'INSERT INTO patients (name, facility_id, bed_id, age, risk_level, primary_condition, allergies, care_focus, avatar_url) VALUES (?,?,?,?,?,?,?,?,?)',
         (
@@ -644,6 +945,228 @@ def _import_csv_readings(conn: sqlite3.Connection) -> None:
         return
     conn.executemany(
         'INSERT INTO readings (timestamp, temperature, humidity, mq2, bh1750fvi, radar, ultrasonic, mood, song, heart_rate, respiration_rate, bed_id, patient_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        rows
+    )
+    conn.commit()
+
+
+def _table_empty(conn: sqlite3.Connection, table: str) -> bool:
+    cur = conn.execute(f'SELECT COUNT(1) FROM {table}')
+    return int(cur.fetchone()[0]) == 0
+
+
+def _maybe_import_legacy_logs(conn: sqlite3.Connection) -> None:
+    try:
+        if _table_empty(conn, 'checkins'):
+            _import_csv_checkins(conn)
+        if _table_empty(conn, 'journal_entries'):
+            _import_csv_journal(conn)
+        if _table_empty(conn, 'goals'):
+            _import_json_goals(conn)
+        if _table_empty(conn, 'predictions'):
+            _import_csv_predictions(conn)
+        if _table_empty(conn, 'support_requests'):
+            _import_json_support_requests(conn)
+    except Exception:
+        return
+
+
+def _import_csv_checkins(conn: sqlite3.Connection) -> None:
+    import csv as _csv
+    path = os.path.join(os.path.dirname(__file__), 'data', 'checkins.csv')
+    if not os.path.exists(path):
+        return
+    rows = []
+    with open(path, 'r', encoding='utf-8') as f:
+        reader = _csv.DictReader(f)
+        for row in reader:
+            try:
+                patient_id = int(row.get('patient_id') or 0)
+            except Exception:
+                continue
+            if not patient_id:
+                continue
+            user = (row.get('user') or '').strip() or 'unknown'
+            timestamp = (row.get('timestamp') or '').strip()
+            mood = row.get('mood')
+            stress = (row.get('stress') or '').strip() or None
+            notes = (row.get('notes') or '').strip() or None
+            try:
+                mood_val = int(float(mood)) if mood not in (None, '') else None
+            except Exception:
+                mood_val = None
+            created_at = timestamp or datetime.utcnow().isoformat()
+            rows.append((user, patient_id, timestamp or created_at, mood_val, stress, notes, created_at))
+    if not rows:
+        return
+    conn.executemany(
+        'INSERT INTO checkins (user, patient_id, timestamp, mood, stress, notes, created_at) VALUES (?,?,?,?,?,?,?)',
+        rows
+    )
+    conn.commit()
+
+
+def _import_csv_journal(conn: sqlite3.Connection) -> None:
+    import csv as _csv
+    path = os.path.join(os.path.dirname(__file__), 'data', 'journal.csv')
+    if not os.path.exists(path):
+        return
+    rows = []
+    with open(path, 'r', encoding='utf-8') as f:
+        reader = _csv.DictReader(f)
+        for row in reader:
+            try:
+                patient_id = int(row.get('patient_id') or 0)
+            except Exception:
+                continue
+            if not patient_id:
+                continue
+            user = (row.get('user') or '').strip() or 'unknown'
+            timestamp = (row.get('timestamp') or '').strip()
+            text = (row.get('text') or '').strip() or None
+            mood = row.get('mood')
+            try:
+                mood_val = int(float(mood)) if mood not in (None, '') else None
+            except Exception:
+                mood_val = None
+            created_at = timestamp or datetime.utcnow().isoformat()
+            rows.append((user, patient_id, timestamp or created_at, mood_val, text, created_at))
+    if not rows:
+        return
+    conn.executemany(
+        'INSERT INTO journal_entries (user, patient_id, timestamp, mood, text, created_at) VALUES (?,?,?,?,?,?)',
+        rows
+    )
+    conn.commit()
+
+
+def _import_json_goals(conn: sqlite3.Connection) -> None:
+    path = os.path.join(os.path.dirname(__file__), 'data', 'goals.json')
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return
+    if not isinstance(data, list):
+        return
+    rows = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        goal_id = str(item.get('id') or '').strip() or None
+        if not goal_id:
+            continue
+        try:
+            patient_id = int(item.get('patient_id') or 0)
+        except Exception:
+            continue
+        if not patient_id:
+            continue
+        title = (item.get('title') or '').strip()
+        if not title:
+            continue
+        status = (item.get('status') or 'active').strip()
+        due_date = (item.get('due_date') or '').strip() or None
+        notify = 1 if item.get('notify') else 0
+        created_at = (item.get('created_at') or '').strip() or datetime.utcnow().isoformat()
+        updated_at = (item.get('updated_at') or '').strip() or created_at
+        created_by = (item.get('created_by') or '').strip() or None
+        rows.append((goal_id, patient_id, title, status, due_date, notify, created_at, updated_at, created_by))
+    if not rows:
+        return
+    conn.executemany(
+        'INSERT INTO goals (id, patient_id, title, status, due_date, notify, created_at, updated_at, created_by) VALUES (?,?,?,?,?,?,?,?,?)',
+        rows
+    )
+    conn.commit()
+
+
+def _import_csv_predictions(conn: sqlite3.Connection) -> None:
+    import csv as _csv
+    path = os.path.join(os.path.dirname(__file__), 'data', 'predictions.csv')
+    if not os.path.exists(path):
+        return
+    rows = []
+    with open(path, 'r', encoding='utf-8') as f:
+        reader = _csv.DictReader(f)
+        for row in reader:
+            patient_id_raw = row.get('patient_id') or ''
+            patient_id = None
+            if str(patient_id_raw).strip().isdigit():
+                patient_id = int(patient_id_raw)
+            timestamp = (row.get('timestamp') or '').strip()
+            try:
+                predicted = int(float(row.get('predicted_mood'))) if row.get('predicted_mood') not in (None, '') else None
+            except Exception:
+                predicted = None
+            def _to_float(val):
+                try:
+                    return float(val)
+                except Exception:
+                    return None
+            def _to_int(val):
+                try:
+                    return int(float(val))
+                except Exception:
+                    return None
+            temperature = _to_float(row.get('Temperature'))
+            humidity = _to_float(row.get('Humidity'))
+            mq2 = (row.get('MQ-2') or row.get('MQ2') or row.get('mq2') or '').strip() or None
+            bh = _to_float(row.get('BH1750FVI'))
+            radar = _to_int(row.get('Radar'))
+            ultrasonic = _to_float(row.get('Ultrasonic'))
+            song = _to_int(row.get('song'))
+            created_at = timestamp or datetime.utcnow().isoformat()
+            rows.append((patient_id, timestamp or created_at, predicted, temperature, humidity, mq2, bh, radar, ultrasonic, song, created_at))
+    if not rows:
+        return
+    conn.executemany(
+        'INSERT INTO predictions (patient_id, timestamp, predicted_mood, temperature, humidity, mq2, bh1750fvi, radar, ultrasonic, song, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        rows
+    )
+    conn.commit()
+
+
+def _import_json_support_requests(conn: sqlite3.Connection) -> None:
+    path = os.path.join(os.path.dirname(__file__), 'data', 'support_requests.json')
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return
+    if not isinstance(data, list):
+        return
+    rows = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        kind = (item.get('kind') or '').strip()
+        details = item.get('details') if isinstance(item.get('details'), dict) else {}
+        email = (details.get('email') or '').strip().lower()
+        if not kind or not email:
+            continue
+        submitted_at = (item.get('submitted_at') or '').strip() or datetime.utcnow().isoformat()
+        rows.append((
+            kind,
+            email,
+            (details.get('name') or '').strip() or None,
+            (details.get('facility') or '').strip() or None,
+            (details.get('role') or '').strip() or None,
+            (details.get('goal') or '').strip() or None,
+            (details.get('message') or '').strip() or None,
+            (details.get('contact') or '').strip() or None,
+            (details.get('notes') or '').strip() or None,
+            (details.get('user_agent') or '').strip() or None,
+            submitted_at
+        ))
+    if not rows:
+        return
+    conn.executemany(
+        'INSERT INTO support_requests (kind, email, name, facility, role, goal, message, contact, notes, user_agent, submitted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         rows
     )
     conn.commit()

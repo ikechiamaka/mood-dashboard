@@ -1,18 +1,21 @@
 ﻿from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 import pandas as pd
-import numpy as np
 import glob
 import os
+import re
+import time
 import joblib
-import csv
 from datetime import datetime, timedelta
 import logging
 from dotenv import load_dotenv
-import openai
+try:
+    import openai
+except ImportError:
+    openai = None
 from uuid import uuid4
 from werkzeug.utils import secure_filename
-
-from data_store import load_json_list, save_json_list
+from werkzeug.exceptions import RequestEntityTooLarge
+from collections import deque
 
 from preprocessing import engineer_features, ensure_feature_order, FEATURE_COLUMNS
 from users import (
@@ -35,6 +38,18 @@ from db import (
     db_list_patients,
     db_get_patient_by_id,
     db_insert_patient,
+    db_list_checkins,
+    db_insert_checkin,
+    db_list_journal_entries,
+    db_insert_journal_entry,
+    db_list_goals,
+    db_get_goal,
+    db_insert_goal,
+    db_update_goal,
+    db_delete_goal,
+    db_insert_prediction,
+    db_insert_support_request,
+    db_insert_audit_event,
     get_conn,
 )
 from functools import lru_cache
@@ -46,7 +61,18 @@ from typing import Any, Dict
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'change-me-dev-secret')
+raw_secret = os.getenv('FLASK_SECRET_KEY')
+env_name = (os.getenv('FLASK_ENV') or os.getenv('APP_ENV') or os.getenv('ENV') or '').lower()
+if not raw_secret:
+    if env_name in ('production', 'prod'):
+        raise RuntimeError('FLASK_SECRET_KEY must be set in production.')
+    raw_secret = uuid4().hex
+    logging.warning('FLASK_SECRET_KEY not set; using ephemeral key. Set FLASK_SECRET_KEY to persist sessions.')
+app.secret_key = raw_secret
+app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_UPLOAD_MB', '5')) * 1024 * 1024
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = env_name in ('production', 'prod')
 remember_days = os.getenv('SESSION_REMEMBER_DAYS', '14')
 try:
     remember_days_int = int(remember_days)
@@ -56,6 +82,58 @@ app.permanent_session_lifetime = timedelta(days=max(1, remember_days_int))
 init_db()
 
 # NOTE: Demo credentials are stored hashed in users.py (environment overrideable)
+
+def _get_csrf_token() -> str:
+    token = session.get('csrf_token')
+    if not token:
+        token = uuid4().hex
+        session['csrf_token'] = token
+    return token
+
+
+_RATE_LIMITS: dict[str, deque[float]] = {}
+
+
+def _rate_limited(key: str, max_requests: int, window_seconds: int) -> bool:
+    now = time.time()
+    bucket = _RATE_LIMITS.setdefault(key, deque())
+    while bucket and (now - bucket[0]) > window_seconds:
+        bucket.popleft()
+    if len(bucket) >= max_requests:
+        return True
+    bucket.append(now)
+    return False
+
+
+def _audit_event(action: str, target: str | None = None, details: str | None = None) -> None:
+    if app.config.get('TESTING'):
+        return
+    try:
+        db_insert_audit_event(
+            user=session.get('user'),
+            action=action,
+            target=target,
+            details=details,
+        )
+    except Exception:
+        return
+
+
+@app.before_request
+def csrf_protect():
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and request.path.startswith('/api/'):
+        if app.config.get('TESTING'):
+            return None
+        if 'user' not in session:
+            return None
+        token = request.headers.get('X-CSRF-Token', '')
+        if not token or token != session.get('csrf_token'):
+            return jsonify({'error': 'CSRF token missing or invalid'}), 403
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_large_upload(_err):
+    return jsonify({'error': 'file too large'}), 413
 
 # Load trained mood model
 from sklearn.dummy import DummyClassifier
@@ -76,14 +154,93 @@ with warnings.catch_warnings(record=True) as wlist:
         mood_model = dummy
 
 
-JOURNAL_PATH = os.path.join('data', 'journal.csv')
-CHECKIN_PATH = os.path.join('data', 'checkins.csv')
-GOALS_FILE = 'goals.json'
 AVATAR_UPLOAD_SUBDIR = 'uploads'
 AVATAR_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), 'static', AVATAR_UPLOAD_SUBDIR)
 ALLOWED_AVATAR_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
-SUPPORT_REQUESTS_FILE = 'support_requests.json'
-PREDICTIONS_PATH = os.path.join('data', 'predictions.csv')
+MAX_CHECKIN_NOTES_LEN = 500
+MAX_JOURNAL_TEXT_LEN = 2000
+MAX_GOAL_TITLE_LEN = 120
+MAX_SUPPORT_TEXT_LEN = 2000
+
+
+def _detect_image_extension(upload) -> str | None:
+    header = upload.stream.read(512)
+    upload.stream.seek(0)
+    if header.startswith(b'\x89PNG\r\n\x1a\n'):
+        return '.png'
+    if header.startswith(b'\xff\xd8\xff'):
+        return '.jpg'
+    if header.startswith(b'GIF87a') or header.startswith(b'GIF89a'):
+        return '.gif'
+    if header[:4] == b'RIFF' and header[8:12] == b'WEBP':
+        return '.webp'
+    return None
+
+
+def _extension_matches_detected(ext: str, detected: str | None) -> bool:
+    if not detected:
+        return False
+    if detected == '.jpg':
+        return ext in ('.jpg', '.jpeg')
+    return ext == detected
+
+
+def _parse_iso_timestamp(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith('Z'):
+            raw = raw[:-1] + '+00:00'
+        parsed = dt.fromisoformat(raw)
+        return parsed.isoformat()
+    except Exception:
+        return None
+
+
+def _valid_email(email: str) -> bool:
+    return bool(re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email or ''))
+
+
+def _coerce_int(value, *, low: int | None = None, high: int | None = None) -> int | None:
+    try:
+        if value is None or value == '':
+            return None
+        num = int(value)
+    except Exception:
+        return None
+    if low is not None and num < low:
+        return None
+    if high is not None and num > high:
+        return None
+    return num
+
+
+def _coerce_float(value, *, low: float | None = None, high: float | None = None) -> float | None:
+    try:
+        if value is None or value == '':
+            return None
+        num = float(value)
+    except Exception:
+        return None
+    if low is not None and num < low:
+        return None
+    if high is not None and num > high:
+        return None
+    return num
+
+
+def _clean_text(value: str | None, max_len: int) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > max_len:
+        return None
+    return cleaned
 
 
 def _normalize_score(value: float | None, low: float, high: float) -> float:
@@ -170,46 +327,6 @@ def _compute_health_scores(df: pd.DataFrame) -> Dict[str, float]:
     }
 
 
-def _ensure_csv_columns(path, header):
-    if not os.path.exists(path):
-        return
-    with open(path, 'r', encoding='utf-8') as f:
-        rows = list(csv.reader(f))
-    if not rows:
-        with open(path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(header)
-        return
-    existing_header = rows[0]
-    if existing_header == header:
-        return
-    index_map = {col: idx for idx, col in enumerate(existing_header)}
-    upgraded = []
-    for row in rows[1:]:
-        new_row = []
-        for col in header:
-            idx = index_map.get(col)
-            new_row.append(row[idx] if idx is not None and idx < len(row) else '')
-        upgraded.append(new_row)
-    with open(path, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        writer.writerows(upgraded)
-
-
-def _append_csv_rows(path, header, rows):
-    if not rows:
-        return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    _ensure_csv_columns(path, header)
-    file_exists = os.path.exists(path) and os.path.getsize(path) > 0
-    with open(path, 'a', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(header)
-        writer.writerows(rows)
-
-
 def _seed_demo_logs_if_needed():
     try:
         patients = db_list_patients()
@@ -225,26 +342,22 @@ def _seed_demo_logs_if_needed():
         patient_summaries.append({'id': pid, 'name': entry.get('name', 'Patient')})
     if not patient_summaries:
         return
-    journal_header = ['user', 'patient_id', 'timestamp', 'mood', 'text']
-    checkins_header = ['user', 'patient_id', 'timestamp', 'mood', 'stress']
-    _ensure_csv_columns(JOURNAL_PATH, journal_header)
-    _ensure_csv_columns(CHECKIN_PATH, checkins_header)
     journal_existing = set()
-    if os.path.exists(JOURNAL_PATH):
-        with open(JOURNAL_PATH, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                pid = row.get('patient_id')
-                if pid and str(pid).isdigit():
-                    journal_existing.add(int(pid))
     checkin_existing = set()
-    if os.path.exists(CHECKIN_PATH):
-        with open(CHECKIN_PATH, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                pid = row.get('patient_id')
-                if pid and str(pid).isdigit():
-                    checkin_existing.add(int(pid))
+    for entry in patient_summaries:
+        pid = entry.get('id')
+        if pid is None:
+            continue
+        try:
+            if db_list_journal_entries(pid, limit=1):
+                journal_existing.add(pid)
+        except Exception:
+            pass
+        try:
+            if db_list_checkins(pid, limit=1):
+                checkin_existing.add(pid)
+        except Exception:
+            pass
     base_user = os.getenv('DEMO_SUPER_EMAIL', 'superadmin@demo.com')
     now = datetime.utcnow()
     phrases = [
@@ -255,6 +368,7 @@ def _seed_demo_logs_if_needed():
         'slept soundly through the night.',
         'was engaged during group session.'
     ]
+    stress_labels = ['low', 'moderate', 'high']
     journal_rows = []
     checkin_rows = []
     for idx, info in enumerate(patient_summaries):
@@ -264,13 +378,15 @@ def _seed_demo_logs_if_needed():
         if pid not in journal_existing:
             mood_value = 3 + (idx % 3)
             note = f"{name} {phrases[idx % len(phrases)]}"
-            journal_rows.append([base_user, pid, timestamp, mood_value, note])
+            journal_rows.append((base_user, pid, timestamp, mood_value, note))
         if pid not in checkin_existing:
             mood_value = 3 + (idx % 2)
-            stress_value = 2 + ((idx + 1) % 3)
-            checkin_rows.append([base_user, pid, timestamp, mood_value, stress_value])
-    _append_csv_rows(JOURNAL_PATH, journal_header, journal_rows)
-    _append_csv_rows(CHECKIN_PATH, checkins_header, checkin_rows)
+            stress_value = stress_labels[idx % len(stress_labels)]
+            checkin_rows.append((base_user, pid, timestamp, mood_value, stress_value))
+    for row in journal_rows:
+        db_insert_journal_entry(row[0], row[1], row[2], row[3], row[4])
+    for row in checkin_rows:
+        db_insert_checkin(row[0], row[1], row[2], row[3], row[4], None)
 _seed_demo_logs_if_needed()
 
 
@@ -295,13 +411,16 @@ key = raw_key.replace("\u2011", "-")
 # Optional extra cleanup if you suspect any other invisible chars:
 key = "".join(ch for ch in key if ord(ch) < 128)
 
-openai.api_key = key if key else None
+if openai is not None:
+    openai.api_key = key if key else None
 
 
 @app.route('/api/chat', methods=['POST'])
 def chat():
     if 'user' not in session:
         return jsonify(error="Unauthorized"), 401
+    if openai is None or not openai.api_key:
+        return jsonify(error="Chat service unavailable"), 503
 
     data = request.get_json(force=True)
     user_msg = (data or {}).get("message", "").strip()
@@ -324,6 +443,51 @@ def chat():
         return jsonify(error="Chat API error"), 500
 
 
+def _build_weekly_insights_payload(pid: int | None) -> str | None:
+    df = _load_sensor_dataframe(pid)
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        df = df.dropna(subset=['timestamp'])
+        now = pd.Timestamp.now()
+        week_ago = now - pd.Timedelta(days=7)
+        df = df[df['timestamp'] >= week_ago]
+        if 'date_only' not in df.columns:
+            df['date_only'] = df['timestamp'].dt.date
+    else:
+        df = pd.DataFrame()
+
+    if df.empty:
+        return None
+
+    for col in ['mood','Ultrasonic','Temperature','BH1750FVI']:
+        if col in df:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    avg_mood = df['mood'].mean() if 'mood' in df else None
+    avg_move = df['Ultrasonic'].mean() if 'Ultrasonic' in df else None
+    avg_temp = df['Temperature'].mean() if 'Temperature' in df else None
+    avg_light = df['BH1750FVI'].mean() if 'BH1750FVI' in df else None
+    mood_series = df['mood'].dropna() if 'mood' in df else pd.Series(dtype=float)
+    max_row = df.loc[mood_series.idxmax()] if not mood_series.empty else None
+    min_row = df.loc[mood_series.idxmin()] if not mood_series.empty else None
+
+    parts = []
+    if pd.notnull(avg_mood):
+        parts.append(f"Over the last 7 days your average mood was {avg_mood:.1f}/6.")
+    if max_row is not None:
+        d = max_row['timestamp'].strftime("%b %d")
+        parts.append(f"Your highest mood ({int(max_row['mood'])}) was on {d}.")
+    if min_row is not None:
+        d = min_row['timestamp'].strftime("%b %d")
+        parts.append(f"Your lowest mood ({int(min_row['mood'])}) was on {d}.")
+    if pd.notnull(avg_move):
+        parts.append(f"Average movement was {avg_move:.0f} cm.")
+    if pd.notnull(avg_temp):
+        parts.append(f"Avg. temperature: {avg_temp:.1f} deg F; light: {avg_light:.0f} lux.")
+
+    return " ".join(parts) if parts else None
+
+
 
 
 
@@ -339,52 +503,10 @@ def weekly_insights():
         pid = int(pid_raw) if pid_raw else None
     except Exception:
         pid = None
+    if pid is not None and _patient_access_ok(pid):
+        _audit_event('view_weekly_insights', str(pid))
 
-    df = _load_sensor_dataframe(pid)
-    if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-        df = df.dropna(subset=['timestamp'])
-        now = pd.Timestamp.now()
-        week_ago = now - pd.Timedelta(days=7)
-        df = df[df['timestamp'] >= week_ago]
-        if 'date_only' not in df.columns:
-            df['date_only'] = df['timestamp'].dt.date
-    else:
-        df = pd.DataFrame()
-
-    if df.empty:
-        return jsonify({"narrative": "No data available for the past week."})
-
-    # Ensure numeric
-    for col in ['mood','Ultrasonic','Temperature','BH1750FVI']:
-        if col in df:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # Compute stats
-    avg_mood = df['mood'].mean() if 'mood' in df else None
-    avg_move = df['Ultrasonic'].mean() if 'Ultrasonic' in df else None
-    avg_temp = df['Temperature'].mean() if 'Temperature' in df else None
-    avg_light = df['BH1750FVI'].mean() if 'BH1750FVI' in df else None
-    mood_series = df['mood'].dropna() if 'mood' in df else pd.Series(dtype=float)
-    max_row = df.loc[mood_series.idxmax()] if not mood_series.empty else None
-    min_row = df.loc[mood_series.idxmin()] if not mood_series.empty else None
-
-    # Build narrative
-    parts = []
-    if pd.notnull(avg_mood):
-        parts.append(f"Over the last 7 days your average mood was {avg_mood:.1f}/6.")
-    if max_row is not None:
-        d = max_row['timestamp'].strftime("%b %d")
-        parts.append(f"Your highest mood ({int(max_row['mood'])}) was on {d}.")
-    if min_row is not None:
-        d = min_row['timestamp'].strftime("%b %d")
-        parts.append(f"Your lowest mood ({int(min_row['mood'])}) was on {d}.")
-    if pd.notnull(avg_move):
-        parts.append(f"Average movement was {avg_move:.0f} cm.")
-    if pd.notnull(avg_temp):
-        parts.append(f"Avg. temperature: {avg_temp:.1f} deg F; light: {avg_light:.0f} lux.")
-
-    narrative = " ".join(parts) if parts else "No data available for the past week."
+    narrative = _build_weekly_insights_payload(pid) or "No data available for the past week."
 
     return jsonify({"narrative": narrative})
 
@@ -407,10 +529,6 @@ def checkins():
 
     if request.method == 'POST':
         payload = request.get_json() or {}
-        ts = payload.get('timestamp')
-        mood = payload.get('mood', '')
-        stress = payload.get('stress', '')
-        notes = (payload.get('notes') or '').strip()
         pid_payload = payload.get('patient_id')
         if pid_payload is None:
             if pid_filter is None:
@@ -422,46 +540,34 @@ def checkins():
             return jsonify({'error': 'invalid patient_id'}), 400
         if not _patient_access_ok(pid_int):
             return jsonify({'error': 'Forbidden'}), 403
-        user = session['user']
-
-        header = ['user', 'patient_id', 'timestamp', 'mood', 'stress', 'notes']
-        _append_csv_rows(CHECKIN_PATH, header, [[user, pid_int, ts, mood, stress, notes]])
+        ts = _parse_iso_timestamp(payload.get('timestamp')) or datetime.utcnow().isoformat()
+        mood = _coerce_int(payload.get('mood'), low=1, high=6)
+        if mood is None:
+            return jsonify({'error': 'mood must be 1-6'}), 400
+        stress_raw = (payload.get('stress') or '').strip().lower()
+        stress_allowed = {'', 'low', 'moderate', 'high'}
+        if stress_raw not in stress_allowed:
+            return jsonify({'error': 'invalid stress value'}), 400
+        notes_raw = payload.get('notes')
+        notes = _clean_text(notes_raw, MAX_CHECKIN_NOTES_LEN)
+        if notes_raw and notes is None:
+            return jsonify({'error': 'notes too long'}), 400
+        db_insert_checkin(
+            user=session['user'],
+            patient_id=pid_int,
+            timestamp=ts,
+            mood=mood,
+            stress=stress_raw or None,
+            notes=notes,
+        )
+        _audit_event('create_checkin', str(pid_int))
         return jsonify({'status': 'ok'})
 
-    entries = []
-    if os.path.exists(CHECKIN_PATH):
-        header = ['user', 'patient_id', 'timestamp', 'mood', 'stress', 'notes']
-        _ensure_csv_columns(CHECKIN_PATH, header)
-        with open(CHECKIN_PATH, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                row_pid = row.get('patient_id')
-                if pid_filter is not None:
-                    if not row_pid:
-                        continue
-                    try:
-                        if int(row_pid) != pid_filter:
-                            continue
-                    except ValueError:
-                        continue
-                entries.append({
-                    'user': row.get('user', ''),
-                    'timestamp': row.get('timestamp', ''),
-                    'mood': row.get('mood', ''),
-                    'stress': row.get('stress', ''),
-                    'notes': row.get('notes', '')
-                })
-    entries.sort(key=lambda e: e['timestamp'], reverse=True)
+    if pid_filter is None:
+        return jsonify([])
+    _audit_event('view_checkins', str(pid_filter))
+    entries = db_list_checkins(pid_filter, limit=50)
     return jsonify(entries)
-
-
-def _load_goals() -> list[dict]:
-    data = load_json_list(GOALS_FILE)
-    return data if isinstance(data, list) else []
-
-
-def _save_goals(items: list[dict]) -> None:
-    save_json_list(GOALS_FILE, items)
 
 
 @app.route('/api/goals', methods=['GET', 'POST'])
@@ -487,50 +593,47 @@ def goals_collection():
     if not _patient_access_ok(pid_filter):
         return jsonify({'error': 'Forbidden'}), 403
 
-    goals = _load_goals()
-
     if request.method == 'GET':
-        results = [g for g in goals if int(g.get('patient_id', -1)) == pid_filter]
-        results.sort(key=lambda g: g.get('created_at', ''), reverse=True)
-        return jsonify(results)
+        _audit_event('view_goals', str(pid_filter))
+        return jsonify(db_list_goals(pid_filter))
 
-    title = (payload.get('title') or '').strip()
+    title = _clean_text(payload.get('title'), MAX_GOAL_TITLE_LEN)
     if not title:
         return jsonify({'error': 'title required'}), 400
     due_date_raw = (payload.get('due_date') or '').strip()
-    due_date = due_date_raw or None
-    notify = bool(payload.get('notify'))
+    due_date = _parse_iso_timestamp(due_date_raw) if due_date_raw else None
+    if due_date_raw and not due_date:
+        return jsonify({'error': 'invalid due_date'}), 400
+    notify = 1 if payload.get('notify') else 0
     now_iso = datetime.utcnow().isoformat()
-    goal = {
-        'id': uuid4().hex,
-        'patient_id': pid_filter,
-        'title': title,
-        'status': 'active',
-        'due_date': due_date,
-        'notify': notify,
-        'created_at': now_iso,
-        'updated_at': now_iso,
-        'created_by': session.get('user'),
-    }
-    goals.append(goal)
-    _save_goals(goals)
-    return jsonify(goal), 201
+    created = db_insert_goal(
+        goal_id=uuid4().hex,
+        patient_id=pid_filter,
+        title=title,
+        status='active',
+        due_date=due_date,
+        notify=notify,
+        created_at=now_iso,
+        updated_at=now_iso,
+        created_by=session.get('user'),
+    )
+    _audit_event('create_goal', str(pid_filter))
+    return jsonify(created), 201
 
 
 @app.route('/api/goals/<goal_id>', methods=['PATCH', 'DELETE'])
 def goal_detail(goal_id: str):
     if 'user' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
-    goals = _load_goals()
-    target = next((g for g in goals if g.get('id') == goal_id), None)
+    target = db_get_goal(goal_id)
     if not target:
         return jsonify({'error': 'Not found'}), 404
     if not _patient_access_ok(target.get('patient_id')):
         return jsonify({'error': 'Forbidden'}), 403
 
     if request.method == 'DELETE':
-        goals = [g for g in goals if g.get('id') != goal_id]
-        _save_goals(goals)
+        db_delete_goal(goal_id)
+        _audit_event('delete_goal', str(target.get('patient_id')))
         return jsonify({'status': 'deleted'})
 
     payload = request.get_json(force=True) or {}
@@ -543,18 +646,23 @@ def goal_detail(goal_id: str):
             if value not in ('active', 'completed'):
                 continue
         if key == 'notify':
-            value = bool(value)
+            value = 1 if value else 0
         if key == 'due_date':
-            value = (value or '').strip() or None
+            raw = (value or '').strip()
+            value = _parse_iso_timestamp(raw) if raw else None
+            if raw and not value:
+                return jsonify({'error': 'invalid due_date'}), 400
         if key == 'title':
-            value = (value or '').strip()
+            value = _clean_text(value, MAX_GOAL_TITLE_LEN)
             if not value:
                 continue
         target[key] = value
         updated = True
     if updated:
         target['updated_at'] = datetime.utcnow().isoformat()
-        _save_goals(goals)
+        saved = db_update_goal(goal_id, target)
+        _audit_event('update_goal', str(target.get('patient_id')))
+        return jsonify(saved or target)
     return jsonify(target)
 
 
@@ -575,9 +683,11 @@ def journal_entries():
 
     if request.method == 'POST':
         payload = request.get_json() or {}
-        ts = payload.get('timestamp')
-        text_value = (payload.get('text') or '').strip()
-        mood = payload.get('mood', '')
+        ts = _parse_iso_timestamp(payload.get('timestamp')) or datetime.utcnow().isoformat()
+        text_value = _clean_text(payload.get('text'), MAX_JOURNAL_TEXT_LEN)
+        if not text_value:
+            return jsonify({'error': 'text required'}), 400
+        mood = _coerce_int(payload.get('mood'), low=1, high=6)
         pid_payload = payload.get('patient_id')
         if pid_payload is None:
             if pid_filter is None:
@@ -590,34 +700,14 @@ def journal_entries():
         if not _patient_access_ok(pid_int):
             return jsonify({'error': 'Forbidden'}), 403
         user = session['user']
-
-        header = ['user', 'patient_id', 'timestamp', 'mood', 'text']
-        _append_csv_rows(JOURNAL_PATH, header, [[user, pid_int, ts, mood, text_value]])
+        db_insert_journal_entry(user=user, patient_id=pid_int, timestamp=ts, mood=mood, text=text_value)
+        _audit_event('create_journal_entry', str(pid_int))
         return jsonify({'status': 'ok'})
 
-    entries = []
-    if os.path.exists(JOURNAL_PATH):
-        header = ['user', 'patient_id', 'timestamp', 'mood', 'text']
-        _ensure_csv_columns(JOURNAL_PATH, header)
-        with open(JOURNAL_PATH, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                row_pid = row.get('patient_id')
-                if pid_filter is not None:
-                    if not row_pid:
-                        continue
-                    try:
-                        if int(row_pid) != pid_filter:
-                            continue
-                    except ValueError:
-                        continue
-                entries.append({
-                    'timestamp': row.get('timestamp', ''),
-                    'mood': row.get('mood', ''),
-                    'text': row.get('text', '')
-                })
-    # Sort newest first
-    entries.sort(key=lambda e: e['timestamp'], reverse=True)
+    if pid_filter is None:
+        return jsonify([])
+    _audit_event('view_journal_entries', str(pid_filter))
+    entries = db_list_journal_entries(pid_filter, limit=50)
     return jsonify(entries)
 
 
@@ -628,18 +718,20 @@ def preprocess_for_prediction(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _record_support_event(kind: str, details: Dict[str, Any]) -> None:
-    payload = {
-        'id': uuid4().hex,
-        'kind': kind,
-        'submitted_at': datetime.utcnow().isoformat() + 'Z',
-        'details': {k: (v or '') for k, v in details.items()},
-    }
-    existing = load_json_list(SUPPORT_REQUESTS_FILE)
-    existing.append(payload)
-    # Keep file from growing unbounded
-    if len(existing) > 500:
-        existing = existing[-500:]
-    save_json_list(SUPPORT_REQUESTS_FILE, existing)
+    submitted_at = datetime.utcnow().isoformat()
+    db_insert_support_request(
+        kind=kind,
+        email=(details.get('email') or '').strip().lower(),
+        name=_clean_text(details.get('name'), MAX_SUPPORT_TEXT_LEN),
+        facility=_clean_text(details.get('facility'), MAX_SUPPORT_TEXT_LEN),
+        role=_clean_text(details.get('role'), MAX_SUPPORT_TEXT_LEN),
+        goal=_clean_text(details.get('goal'), MAX_SUPPORT_TEXT_LEN),
+        message=_clean_text(details.get('message'), MAX_SUPPORT_TEXT_LEN),
+        contact=_clean_text(details.get('contact'), MAX_SUPPORT_TEXT_LEN),
+        notes=_clean_text(details.get('notes'), MAX_SUPPORT_TEXT_LEN),
+        user_agent=_clean_text(details.get('user_agent'), MAX_SUPPORT_TEXT_LEN),
+        submitted_at=submitted_at,
+    )
 
 
 def _request_data_as_dict() -> Dict[str, Any]:
@@ -659,22 +751,24 @@ def home():
 
 @app.route('/support/request-access', methods=['POST'])
 def support_request_access():
+    if _rate_limited(f'support:{request.remote_addr}', 6, 300):
+        return jsonify({'error': 'Too many requests'}), 429
     data = _request_data_as_dict()
-    email = (data.get('email') or '').strip()
-    name = (data.get('name') or '').strip()
-    facility = (data.get('facility') or '').strip()
-    role = (data.get('role') or '').strip()
-    goal = (data.get('goal') or '').strip()
-    message = (data.get('message') or '').strip()
-    if not email:
-        return jsonify({'error': 'email required'}), 400
+    email = (data.get('email') or '').strip().lower()
+    if not email or not _valid_email(email):
+        return jsonify({'error': 'valid email required'}), 400
+    name = _clean_text(data.get('name'), MAX_SUPPORT_TEXT_LEN)
+    facility = _clean_text(data.get('facility'), MAX_SUPPORT_TEXT_LEN)
+    role = _clean_text(data.get('role'), MAX_SUPPORT_TEXT_LEN)
+    goal = _clean_text(data.get('goal'), MAX_SUPPORT_TEXT_LEN)
+    message = _clean_text(data.get('message'), MAX_SUPPORT_TEXT_LEN)
     _record_support_event('request_access', {
-        'email': email.lower(),
-        'name': name,
-        'facility': facility,
-        'role': role,
-        'goal': goal,
-        'message': message,
+        'email': email,
+        'name': name or '',
+        'facility': facility or '',
+        'role': role or '',
+        'goal': goal or '',
+        'message': message or '',
         'user_agent': request.headers.get('User-Agent', ''),
     })
     return jsonify({'status': 'ok'})
@@ -682,18 +776,20 @@ def support_request_access():
 
 @app.route('/support/forgot-password', methods=['POST'])
 def support_forgot_password():
+    if _rate_limited(f'support:{request.remote_addr}', 6, 300):
+        return jsonify({'error': 'Too many requests'}), 429
     data = _request_data_as_dict()
-    email = (data.get('email') or '').strip()
-    name = (data.get('name') or '').strip()
-    contact = (data.get('contact') or '').strip()
-    notes = (data.get('notes') or '').strip()
-    if not email:
-        return jsonify({'error': 'email required'}), 400
+    email = (data.get('email') or '').strip().lower()
+    if not email or not _valid_email(email):
+        return jsonify({'error': 'valid email required'}), 400
+    name = _clean_text(data.get('name'), MAX_SUPPORT_TEXT_LEN)
+    contact = _clean_text(data.get('contact'), MAX_SUPPORT_TEXT_LEN)
+    notes = _clean_text(data.get('notes'), MAX_SUPPORT_TEXT_LEN)
     _record_support_event('forgot_password', {
-        'email': email.lower(),
-        'name': name,
-        'contact': contact,
-        'notes': notes,
+        'email': email,
+        'name': name or '',
+        'contact': contact or '',
+        'notes': notes or '',
         'user_agent': request.headers.get('User-Agent', ''),
     })
     # Do not reveal whether email exists in system.
@@ -705,13 +801,31 @@ def set_security_headers(resp):
     resp.headers['X-Content-Type-Options'] = 'nosniff'
     resp.headers['X-Frame-Options'] = 'DENY'
     resp.headers['X-XSS-Protection'] = '1; mode=block'
+    resp.headers['Referrer-Policy'] = 'no-referrer'
+    resp.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(), interest-cohort=()'
     resp.headers['Cache-Control'] = 'no-store'
+    if env_name in ('production', 'prod'):
+        resp.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    resp.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; "
+        "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
+        "object-src 'none'"
+    )
     return resp
 
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
+        if _rate_limited(f'login:{request.remote_addr}', 10, 300):
+            return render_template('login.html', error=1)
         email = request.form.get('email','')
         password = request.form.get('password','')
         remember = request.form.get('remember')
@@ -729,6 +843,7 @@ def login():
                 session['avatar_url'] = user.avatar_url
             else:
                 session.pop('avatar_url', None)
+            _get_csrf_token()
             return redirect(url_for('dashboard'))
         params = {'error': 1}
         if email:
@@ -787,6 +902,7 @@ def me():
         'facility_id': facility_id,
         'assigned_patient_ids': assigned,
         'avatar_url': avatar_url,
+        'csrf_token': _get_csrf_token(),
     })
 
 
@@ -836,7 +952,7 @@ def patients_list():
     if role not in ('super_admin', 'facility_admin'):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.get_json(force=True) or {}
-    name = (data.get('name') or '').strip()
+    name = _clean_text(data.get('name'), 120)
     if not name:
         return jsonify({'error': 'name required'}), 400
     if role == 'super_admin':
@@ -844,21 +960,13 @@ def patients_list():
         fid = int(fid_raw) if isinstance(fid_raw, (int, str)) and str(fid_raw).isdigit() else None
     else:
         fid = session.get('facility_id')
-    bed_id = (data.get('bed_id') or '').strip() or None
-    age_raw = data.get('age')
-    age_val = None
-    if isinstance(age_raw, (int, float)):
-        try:
-            age_val = int(age_raw)
-        except Exception:
-            age_val = None
-    elif isinstance(age_raw, str) and age_raw.strip().isdigit():
-        age_val = int(age_raw.strip())
-    risk_level = (data.get('risk_level') or '').strip() or None
-    primary_condition = (data.get('primary_condition') or '').strip() or None
-    allergies = (data.get('allergies') or '').strip() or None
-    care_focus = (data.get('care_focus') or '').strip() or None
-    avatar_url = (data.get('avatar_url') or '').strip() or None
+    bed_id = _clean_text(data.get('bed_id'), 40)
+    age_val = _coerce_int(data.get('age'), low=0, high=130)
+    risk_level = _clean_text(data.get('risk_level'), 32)
+    primary_condition = _clean_text(data.get('primary_condition'), 120)
+    allergies = _clean_text(data.get('allergies'), 120)
+    care_focus = _clean_text(data.get('care_focus'), 200)
+    avatar_url = _clean_text(data.get('avatar_url'), 250)
     created = db_insert_patient(
         name,
         fid,
@@ -870,6 +978,7 @@ def patients_list():
         care_focus=care_focus,
         avatar_url=avatar_url
     )
+    _audit_event('create_patient', str(created.get('id')))
     return jsonify(created), 201
 
 
@@ -1140,32 +1249,24 @@ def dashboard_data():
         pid = int(pid_raw) if pid_raw else None
     except Exception:
         pid = None
+    if pid is not None:
+        _audit_event('view_dashboard_data', str(pid))
     data = _cached_aggregates(marker, pid)
     if 'error' in data:
         return jsonify(data), 404
     return jsonify(data)
 
-@app.route('/api/latest_reading')
-def latest_reading():
-    if 'user' not in session:
-        return jsonify({'error':'Unauthorized'}), 401
-    pid_raw = request.args.get('patient_id')
-    if pid_raw and not _patient_access_ok(pid_raw):
-        return jsonify({'error': 'Forbidden'}), 403
-    try:
-        pid = int(pid_raw) if pid_raw else None
-    except Exception:
-        pid = None
+
+def _latest_reading_payload(pid: int | None) -> Dict[str, Any] | None:
     df = _load_sensor_dataframe(pid)
     if df is None or df.empty or 'timestamp' not in df.columns:
-        return jsonify({'error': 'No recent readings found'}), 404
+        return None
     df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
     df = df.dropna(subset=['timestamp'])
     if df.empty:
-        return jsonify({'error': 'No recent readings found'}), 404
+        return None
     last = df.sort_values('timestamp').iloc[-1]
 
-    # Safely handle NaNs
     song_val = last.get('song', 0)
     if pd.isna(song_val):
         song_val = 0
@@ -1193,7 +1294,7 @@ def latest_reading():
             except Exception:
                 return default
 
-    return jsonify({
+    return {
         'timestamp': last['timestamp'].isoformat(),
         'Temperature': _safe_float(last.get('Temperature')),
         'Humidity': _safe_float(last.get('Humidity')),
@@ -1202,7 +1303,25 @@ def latest_reading():
         'Radar': _safe_int(last.get('Radar')),
         'Ultrasonic': _safe_float(last.get('Ultrasonic')),
         'song': _safe_int(song_val)
-    })
+    }
+
+@app.route('/api/latest_reading')
+def latest_reading():
+    if 'user' not in session:
+        return jsonify({'error':'Unauthorized'}), 401
+    pid_raw = request.args.get('patient_id')
+    if pid_raw and not _patient_access_ok(pid_raw):
+        return jsonify({'error': 'Forbidden'}), 403
+    try:
+        pid = int(pid_raw) if pid_raw else None
+    except Exception:
+        pid = None
+    if pid is not None:
+        _audit_event('view_latest_reading', str(pid))
+    payload = _latest_reading_payload(pid)
+    if payload is None:
+        return jsonify({'error': 'No recent readings found'}), 404
+    return jsonify(payload)
 
 def _validate_prediction_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     required = ['timestamp','Temperature','Humidity','MQ-2','BH1750FVI','Radar','Ultrasonic','song']
@@ -1224,6 +1343,17 @@ def _validate_prediction_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _predict_mood_from_payload(payload: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
+    clean = _validate_prediction_payload(payload)
+    df = pd.DataFrame([clean], columns=[
+        'timestamp','Temperature','Humidity','MQ-2','BH1750FVI','Radar','Ultrasonic','song'
+    ])
+    df = preprocess_for_prediction(df)
+    Xnew = df[FEATURE_COLUMNS]
+    pred = mood_model.predict(Xnew)[0]
+    return int(pred), clean
+
+
 @app.route('/api/predict_mood', methods=['POST'])
 def predict_mood():
     if 'user' not in session:
@@ -1239,35 +1369,78 @@ def predict_mood():
             pid_val = None
     payload = request.get_json() or {}
     try:
-        clean = _validate_prediction_payload(payload)
+        pred, clean = _predict_mood_from_payload(payload)
     except ValueError as ve:
         return jsonify({'error': str(ve)}), 400
-    df = pd.DataFrame([clean], columns=[
-        'timestamp','Temperature','Humidity','MQ-2','BH1750FVI','Radar','Ultrasonic','song'
-    ])
-    df = preprocess_for_prediction(df)
-    Xnew = df[FEATURE_COLUMNS]
-    pred = mood_model.predict(Xnew)[0]
     # Persist per-patient prediction history (if patient context provided)
-    header = ['patient_id', 'timestamp', 'predicted_mood', 'Temperature', 'Humidity', 'MQ-2', 'BH1750FVI', 'Radar', 'Ultrasonic', 'song']
     ts_value = clean.get('timestamp') or datetime.utcnow().isoformat()
-    row = [
-        pid_val if pid_val is not None else '',
-        ts_value,
-        int(pred),
-        clean.get('Temperature', ''),
-        clean.get('Humidity', ''),
-        clean.get('MQ-2', ''),
-        clean.get('BH1750FVI', ''),
-        clean.get('Radar', ''),
-        clean.get('Ultrasonic', ''),
-        clean.get('song', ''),
-    ]
     try:
-        _append_csv_rows(PREDICTIONS_PATH, header, [row])
+        db_insert_prediction(
+            patient_id=pid_val,
+            timestamp=ts_value,
+            predicted_mood=int(pred),
+            temperature=clean.get('Temperature'),
+            humidity=clean.get('Humidity'),
+            mq2=clean.get('MQ-2'),
+            bh1750fvi=clean.get('BH1750FVI'),
+            radar=clean.get('Radar'),
+            ultrasonic=clean.get('Ultrasonic'),
+            song=clean.get('song'),
+        )
     except Exception:
         app.logger.debug("Could not persist prediction row", exc_info=True)
     return jsonify({'predicted_mood': int(pred)})
+
+
+@app.route('/api/patient_bundle')
+def patient_bundle():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    pid_raw = request.args.get('patient_id')
+    if not pid_raw:
+        return jsonify({'error': 'patient_id required'}), 400
+    try:
+        pid = int(pid_raw)
+    except Exception:
+        return jsonify({'error': 'invalid patient_id'}), 400
+    if not _patient_access_ok(pid):
+        return jsonify({'error': 'Forbidden'}), 403
+    marker = int(dt.utcnow().timestamp() // 60)
+    dashboard = _cached_aggregates(marker, pid)
+    weekly = _build_weekly_insights_payload(pid)
+    latest = _latest_reading_payload(pid)
+    predicted_mood = None
+    if latest:
+        try:
+            pred, clean = _predict_mood_from_payload(latest.copy())
+            predicted_mood = pred
+            ts_value = clean.get('timestamp') or datetime.utcnow().isoformat()
+            db_insert_prediction(
+                patient_id=pid,
+                timestamp=ts_value,
+                predicted_mood=predicted_mood,
+                temperature=clean.get('Temperature'),
+                humidity=clean.get('Humidity'),
+                mq2=clean.get('MQ-2'),
+                bh1750fvi=clean.get('BH1750FVI'),
+                radar=clean.get('Radar'),
+                ultrasonic=clean.get('Ultrasonic'),
+                song=clean.get('song'),
+            )
+        except Exception:
+            predicted_mood = None
+    payload = {
+        'dashboard': None if 'error' in dashboard else dashboard,
+        'dashboard_error': dashboard.get('error') if isinstance(dashboard, dict) and 'error' in dashboard else None,
+        'weekly_insights': weekly,
+        'latest_reading': latest,
+        'predicted_mood': predicted_mood,
+        'checkins': db_list_checkins(pid, limit=25),
+        'goals': db_list_goals(pid),
+        'journal_entries': db_list_journal_entries(pid, limit=10),
+    }
+    _audit_event('view_patient_bundle', str(pid))
+    return jsonify(payload)
 
 """
 Facility management + alerting (RR<5) additions
@@ -1278,9 +1451,11 @@ Facility management + alerting (RR<5) additions
 def staff_api():
     if 'user' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
+    role = session.get('role')
     # GET filtered by facility
     if request.method == 'GET':
-        role = session.get('role')
+        if role not in ('super_admin', 'facility_admin'):
+            return jsonify({'error': 'Forbidden'}), 403
         if role == 'super_admin':
             facility_id = request.args.get('facility_id')
             fid = int(facility_id) if facility_id and facility_id.isdigit() else None
@@ -1288,11 +1463,11 @@ def staff_api():
             fid = session.get('facility_id')
         return jsonify(db_list_staff(fid))
     # POST requires admin privileges
-    if session.get('role') not in ('super_admin', 'facility_admin'):
+    if role not in ('super_admin', 'facility_admin'):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.get_json(force=True) or {}
-    name = (data.get('name') or '').strip()
-    phone = (data.get('phone') or '').strip()
+    name = _clean_text(data.get('name'), 80)
+    phone = _clean_text(data.get('phone'), 32)
     if not name or not phone:
         return jsonify({'error': 'name and phone required'}), 400
     from uuid import uuid4
@@ -1302,6 +1477,7 @@ def staff_api():
         if isinstance(maybe, int) or (isinstance(maybe, str) and maybe.isdigit()):
             fid = int(maybe)
     item = db_insert_staff(str(uuid4()), name, phone, fid)
+    _audit_event('create_staff', item.get('id'))
     return jsonify(item), 201
 
 
@@ -1314,6 +1490,7 @@ def staff_delete(staff_id: str):
     ok = db_delete_staff(staff_id)
     if not ok:
         return jsonify({'error': 'Not found'}), 404
+    _audit_event('delete_staff', staff_id)
     return jsonify({'status': 'deleted'})
 
 
@@ -1321,20 +1498,22 @@ def staff_delete(staff_id: str):
 def beds_api():
     if 'user' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
+    role = session.get('role')
     if request.method == 'GET':
-        role = session.get('role')
+        if role not in ('super_admin', 'facility_admin'):
+            return jsonify({'error': 'Forbidden'}), 403
         if role == 'super_admin':
             facility_id = request.args.get('facility_id')
             fid = int(facility_id) if facility_id and facility_id.isdigit() else None
         else:
             fid = session.get('facility_id')
         return jsonify(db_list_beds(fid))
-    if session.get('role') not in ('super_admin', 'facility_admin'):
+    if role not in ('super_admin', 'facility_admin'):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.get_json(force=True) or {}
-    name = (data.get('name') or '').strip()
-    room = (data.get('room') or '').strip()
-    patient = (data.get('patient') or '').strip()
+    name = _clean_text(data.get('name'), 80)
+    room = _clean_text(data.get('room'), 40) or ''
+    patient = _clean_text(data.get('patient'), 80) or ''
     if not name:
         return jsonify({'error': 'name required'}), 400
     from uuid import uuid4
@@ -1344,6 +1523,7 @@ def beds_api():
         if isinstance(maybe, int) or (isinstance(maybe, str) and maybe.isdigit()):
             fid = int(maybe)
     item = db_insert_bed(str(uuid4()), name, room, patient, fid)
+    _audit_event('create_bed', item.get('id'))
     return jsonify(item), 201
 
 
@@ -1351,24 +1531,37 @@ def beds_api():
 def schedule_api():
     if 'user' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
+    role = session.get('role')
     if request.method == 'GET':
-        role = session.get('role')
+        if role not in ('super_admin', 'facility_admin'):
+            return jsonify({'error': 'Forbidden'}), 403
         if role == 'super_admin':
             facility_id = request.args.get('facility_id')
             fid = int(facility_id) if facility_id and facility_id.isdigit() else None
         else:
             fid = session.get('facility_id')
         return jsonify(db_list_schedule(fid))
-    if session.get('role') not in ('super_admin', 'facility_admin'):
+    if role not in ('super_admin', 'facility_admin'):
         return jsonify({'error': 'Forbidden'}), 403
     data = request.get_json(force=True) or {}
-    name = (data.get('name') or '').strip()
+    name = _clean_text(data.get('name'), 80)
     start = (data.get('start') or '').strip()  # HH:MM 24h
     end = (data.get('end') or '').strip()
     days = data.get('days') or []              # [0-6] Mon=0
     staff_ids = data.get('staff_ids') or []
     if not name or not start or not end or not isinstance(days, list):
         return jsonify({'error': 'name, start, end, days required'}), 400
+    if _hhmm_to_minutes(start) < 0 or _hhmm_to_minutes(end) < 0:
+        return jsonify({'error': 'invalid time format'}), 400
+    day_values = []
+    for d in days:
+        day = _coerce_int(d, low=0, high=6)
+        if day is None:
+            return jsonify({'error': 'invalid days value'}), 400
+        day_values.append(day)
+    days = day_values
+    if not isinstance(staff_ids, list):
+        return jsonify({'error': 'invalid staff_ids'}), 400
     from uuid import uuid4
     fid = session.get('facility_id')
     if session.get('role') == 'super_admin':
@@ -1376,6 +1569,7 @@ def schedule_api():
         if isinstance(maybe, int) or (isinstance(maybe, str) and maybe.isdigit()):
             fid = int(maybe)
     item = db_insert_schedule(str(uuid4()), name, start, end, days, staff_ids, fid)
+    _audit_event('create_schedule', item.get('id'))
     return jsonify(item), 201
 
 
@@ -1450,7 +1644,7 @@ def users_api():
     email = (data.get('email') or '').strip().lower()
     raw_pw = (data.get('password') or '').strip()
     role_new = (data.get('role') or 'staff').strip()
-    name = (data.get('name') or '').strip() or None
+    name = _clean_text(data.get('name'), 120)
     if role == 'super_admin':
         fid_raw = data.get('facility_id')
         fid = int(fid_raw) if isinstance(fid_raw, (int, str)) and str(fid_raw).isdigit() else None
@@ -1459,8 +1653,15 @@ def users_api():
         if role_new == 'super_admin':
             return jsonify({'error': 'facility_admin cannot create super_admin'}), 403
     assigned = data.get('assigned_patient_ids') or []
-    if not email or not raw_pw:
-        return jsonify({'error': 'email and password are required'}), 400
+    if not email or not _valid_email(email):
+        return jsonify({'error': 'valid email required'}), 400
+    if not raw_pw or len(raw_pw) < 8:
+        return jsonify({'error': 'password must be at least 8 characters'}), 400
+    if role_new not in ('staff', 'facility_admin', 'super_admin'):
+        return jsonify({'error': 'invalid role'}), 400
+    if not isinstance(assigned, list):
+        return jsonify({'error': 'assigned_patient_ids must be a list'}), 400
+    assigned = [int(x) for x in assigned if str(x).isdigit()]
     from werkzeug.security import generate_password_hash
     phash = generate_password_hash(raw_pw)
     try:
@@ -1469,6 +1670,7 @@ def users_api():
         return jsonify({'error': f'create failed: {e}'}), 400
     created.pop('password_hash', None)
     created['id'] = created.get('email')
+    _audit_event('create_user', created.get('email'))
     return jsonify(created), 201
 
 
@@ -1488,6 +1690,8 @@ def user_item(email: str):
             if target.get('role') == 'super_admin' or target.get('facility_id') != session.get('facility_id'):
                 return jsonify({'error': 'Forbidden'}), 403
         ok = db_delete_user_by_email(email)
+        if ok:
+            _audit_event('delete_user', email)
         return jsonify({'status': 'deleted' if ok else 'not_found'})
     # PATCH
     target_list = [x for x in db_list_users(None) if x.get('email','').lower() == email.lower()]
@@ -1497,11 +1701,14 @@ def user_item(email: str):
     data = request.get_json(force=True) or {}
     updates = {}
     if 'role' in data:
+        if data['role'] not in ('staff', 'facility_admin', 'super_admin'):
+            return jsonify({'error': 'invalid role'}), 400
         if role == 'facility_admin' and data['role'] == 'super_admin':
             return jsonify({'error': 'Forbidden'}), 403
         updates['role'] = data['role']
     if 'name' in data:
-        updates['name'] = (data.get('name') or '').strip()
+        name = _clean_text(data.get('name'), 120)
+        updates['name'] = name
     if 'facility_id' in data:
         if role == 'facility_admin':
             updates['facility_id'] = session.get('facility_id')
@@ -1512,13 +1719,16 @@ def user_item(email: str):
             else:
                 updates['facility_id'] = None
     if 'assigned_patient_ids' in data and isinstance(data.get('assigned_patient_ids'), list):
-        updates['assigned_patient_ids'] = data.get('assigned_patient_ids')
+        updates['assigned_patient_ids'] = [int(x) for x in data.get('assigned_patient_ids') if str(x).isdigit()]
     if 'password' in data and data.get('password'):
+        if len(str(data['password'])) < 8:
+            return jsonify({'error': 'password must be at least 8 characters'}), 400
         from werkzeug.security import generate_password_hash
         updates['password_hash'] = generate_password_hash(data['password'])
     updated = db_update_user(email, updates)
     updated.pop('password_hash', None)
     updated['id'] = updated.get('email')
+    _audit_event('update_user', email)
     return jsonify(updated)
 
 
@@ -1533,6 +1743,9 @@ def profile_avatar():
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_AVATAR_EXTENSIONS:
         return jsonify({'error': 'unsupported file type'}), 400
+    detected = _detect_image_extension(upload)
+    if not _extension_matches_detected(ext, detected):
+        return jsonify({'error': 'invalid image content'}), 400
     os.makedirs(AVATAR_UPLOAD_DIR, exist_ok=True)
     final_name = f"{uuid4().hex}{ext}"
     dest_path = os.path.join(AVATAR_UPLOAD_DIR, final_name)
@@ -1640,6 +1853,8 @@ def start_background_tasks():
     if app.config.get('TESTING'):
         return
     if os.getenv('DISABLE_ALERT_MONITOR', '0') == '1':
+        return
+    if not app.debug and os.getenv('ENABLE_ALERT_MONITOR', '0') != '1':
         return
     if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         return

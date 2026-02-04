@@ -13,16 +13,54 @@ let checkinsCache = [];
 let goalsCache = [];
 let adminUiInitialized = false;
 let sidebarOpen = false;
+let csrfToken = null;
+let drawerFocusCleanup = null;
+let commandPaletteFocusCleanup = null;
+let drawerReturnFocus = null;
 
-function buildAvatarUrl(name){
-  const base = 'https://ui-avatars.com/api/?background=4e73df&color=fff&name=';
-  return `${base}${encodeURIComponent(name || 'Patient')}`;
+function trapFocus(container){
+  if(!container){
+    return () => {};
+  }
+  const focusableSelector = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
+  const focusables = Array.from(container.querySelectorAll(focusableSelector))
+    .filter(el => !el.hasAttribute('disabled') && !el.getAttribute('aria-hidden'));
+  if(!focusables.length){
+    return () => {};
+  }
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const handleKey = (evt) => {
+    if(evt.key !== 'Tab'){
+      return;
+    }
+    if(evt.shiftKey && document.activeElement === first){
+      evt.preventDefault();
+      last.focus();
+    }else if(!evt.shiftKey && document.activeElement === last){
+      evt.preventDefault();
+      first.focus();
+    }
+  };
+  container.addEventListener('keydown', handleKey);
+  return () => container.removeEventListener('keydown', handleKey);
+}
+
+function buildAvatarUrl(_name){
+  return '/static/pic.jpg';
+}
+
+function isLocalAssetUrl(value){
+  if(!value || typeof value !== 'string'){
+    return false;
+  }
+  return value.startsWith('/') && !value.startsWith('//');
 }
 
 function refreshUserAvatar(profile){
   const name = (profile && (profile.name || profile.email)) || 'User';
   const fallback = buildAvatarUrl(name);
-  const src = profile && profile.avatar_url ? profile.avatar_url : fallback;
+  const src = profile && isLocalAssetUrl(profile.avatar_url) ? profile.avatar_url : fallback;
   const navAvatar = document.getElementById('currentUserAvatar');
   if(navAvatar){
     navAvatar.src = src;
@@ -61,10 +99,10 @@ function showToast({ title = 'Notice', message = '', variant = 'success', delay 
   wrapper.setAttribute('aria-atomic', 'true');
   wrapper.innerHTML = `
     <div class="toast-header">
-      <strong class="me-auto">${title}</strong>
+      <strong class="me-auto">${escapeHtml(title)}</strong>
       <button type="button" class="btn-close ms-2 mb-1" data-bs-dismiss="toast" aria-label="Close"></button>
     </div>
-    <div class="toast-body">${message}</div>
+    <div class="toast-body">${escapeHtml(message)}</div>
   `;
   container.appendChild(wrapper);
   const toast = bootstrap.Toast.getOrCreateInstance(wrapper, { delay });
@@ -155,6 +193,7 @@ async function initUser(){
     const base = roles[me.role] || roles.staff;
     currentUserProfile = me;
     refreshUserAvatar(me);
+    csrfToken = me.csrf_token || null;
     currentUser = {
       ...base,
       userName: me.name || base.userName,
@@ -199,6 +238,7 @@ async function uploadProfileAvatar(file){
   formData.append('avatar', file);
   const resp = await fetch('/api/profile/avatar', {
     method:'POST',
+    headers: withCsrf(),
     body: formData,
     credentials:'same-origin'
   });
@@ -259,6 +299,14 @@ function withQuery(path, params){
   return url.pathname + (url.search ? url.search : '');
 }
 
+function withCsrf(headers){
+  const merged = { ...(headers || {}) };
+  if(csrfToken){
+    merged['X-CSRF-Token'] = csrfToken;
+  }
+  return merged;
+}
+
 async function apiGet(path, params){
   const url = params? withQuery(path, params) : path;
   const r = await fetch(url, { credentials:'same-origin' });
@@ -269,7 +317,7 @@ async function apiGet(path, params){
 
 async function apiPost(path, payload, params){
   const url = params? withQuery(path, params) : path;
-  const r = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, credentials:'same-origin', body: JSON.stringify(payload) });
+  const r = await fetch(url, { method:'POST', headers: withCsrf({ 'Content-Type':'application/json' }), credentials:'same-origin', body: JSON.stringify(payload) });
   if(r.status === 401) { window.location.href = '/login'; return null; }
   if(!r.ok) throw new Error(`POST ${path} failed: ${r.status}`);
   return r.json();
@@ -277,7 +325,7 @@ async function apiPost(path, payload, params){
 
 async function apiPatch(path, payload, params){
   const url = params ? withQuery(path, params) : path;
-  const r = await fetch(url, { method:'PATCH', headers:{ 'Content-Type':'application/json' }, credentials:'same-origin', body: JSON.stringify(payload) });
+  const r = await fetch(url, { method:'PATCH', headers: withCsrf({ 'Content-Type':'application/json' }), credentials:'same-origin', body: JSON.stringify(payload) });
   if(r.status === 401){ window.location.href = '/login'; return null; }
   if(!r.ok) throw new Error(`PATCH ${path} failed: ${r.status}`);
   return r.json();
@@ -285,7 +333,7 @@ async function apiPatch(path, payload, params){
 
 async function apiDelete(path, params){
   const url = params ? withQuery(path, params) : path;
-  const r = await fetch(url, { method:'DELETE', credentials:'same-origin' });
+  const r = await fetch(url, { method:'DELETE', headers: withCsrf(), credentials:'same-origin' });
   if(r.status === 401){ window.location.href = '/login'; return null; }
   if(r.status === 204) return null;
   if(!r.ok) throw new Error(`DELETE ${path} failed: ${r.status}`);
@@ -381,73 +429,90 @@ function updateHealthStatusOverview(slices){
   }catch(e){ /* ignore */ }
 }
 
-async function loadDashboardData(){
+function applyDashboardData(data){
+  if(!data){
+    return;
+  }
+  const s = data.summary || {};
+  setText('avgTempValue', (s.avgTemp != null && !isNaN(s.avgTemp)) ? `${s.avgTemp}\u00B0F` : '--');
+  setText('avgHumidityValue', (s.avgHumidity != null && !isNaN(s.avgHumidity)) ? `${s.avgHumidity}%` : '--');
+  const aq = document.getElementById('airQualityBadge');
+  if(aq && s.currentAirQuality){
+    aq.textContent = s.currentAirQuality;
+    aq.className = 'badge-indicator ' + (s.currentAirQuality==='Good' ? 'bg-success text-white' : 'bg-warning');
+  }
+  setText('patientMovementStatus', s.movementStatus || '--');
+  setText('patientEnvironmentStatus', s.currentAirQuality || '--');
+  setText('patientDrawerMovement', s.movementStatus || '--');
+  setText('patientDrawerEnvironment', s.currentAirQuality || '--');
+  setText('healthTrendLabel', s.movementStatus || 'Live');
+  setText('healthStatusLabel', s.currentAirQuality || 'Optimal');
+  if(typeof s.overallScore === 'number'){
+    const overallDisplay = `${Math.round(s.overallScore)}%`;
+    setText('patientOverallScore', overallDisplay);
+    setText('patientOverallScoreCard', overallDisplay);
+    setText('patientDrawerOverall', overallDisplay);
+    setText('healthDonutCenter', overallDisplay);
+  } else {
+    setText('patientOverallScore', '--');
+    setText('patientOverallScoreCard', '--');
+    setText('patientDrawerOverall', '--');
+    setText('healthDonutCenter', '--');
+  }
+  const heroSummaryParts = [];
+  if(currentPatient && currentPatient.name){
+    heroSummaryParts.push(`Now viewing: ${currentPatient.name}`);
+  }
+  if(s.movementStatus){
+    heroSummaryParts.push(`Movement ${s.movementStatus}`);
+  }
+  if(s.currentAirQuality){
+    heroSummaryParts.push(`Environment ${s.currentAirQuality}`);
+  }
+  if(typeof s.overallScore === 'number'){
+    heroSummaryParts.push(`${Math.round(s.overallScore)}% overall`);
+  }
+  if(heroSummaryParts.length){
+    setText('heroPatientContext', heroSummaryParts.join(' | '));
+  } else if(currentPatient && currentPatient.name){
+    setText('heroPatientContext', `Monitoring live signals for ${currentPatient.name}`);
+  }
+  const found = patientsCache.find(p => String(p.id) === String(selectedPatientId));
+  if(found){
+    if(typeof s.overallScore === 'number') found.computed_score = s.overallScore;
+    if(s.movementStatus) found.movement_label = s.movementStatus;
+    if(s.currentAirQuality) found.environment_label = s.currentAirQuality;
+    renderPatientList();
+    updatePatientDrawer(found);
+  }
+  if(data.donutSlices) updateDonutFromSlices(data.donutSlices);
+  if(data.charts) updateTrendCharts(data.charts);
+}
+
+async function loadDashboardData(dataOverride){
   try{
-    const data = await apiGet('/api/dashboard_data', { patient_id: selectedPatientId });
+    const data = dataOverride || await apiGet('/api/dashboard_data', { patient_id: selectedPatientId });
     if(!data) return;
-    const s = data.summary || {};
-    setText('avgTempValue', (s.avgTemp != null && !isNaN(s.avgTemp)) ? `${s.avgTemp}\u00B0F` : '--');
-    setText('avgHumidityValue', (s.avgHumidity != null && !isNaN(s.avgHumidity)) ? `${s.avgHumidity}%` : '--');
-    const aq = document.getElementById('airQualityBadge');
-    if(aq && s.currentAirQuality){
-      aq.textContent = s.currentAirQuality;
-      aq.className = 'badge-indicator ' + (s.currentAirQuality==='Good' ? 'bg-success text-white' : 'bg-warning');
-    }
-    setText('patientMovementStatus', s.movementStatus || '--');
-    setText('patientEnvironmentStatus', s.currentAirQuality || '--');
-    setText('patientDrawerMovement', s.movementStatus || '--');
-    setText('patientDrawerEnvironment', s.currentAirQuality || '--');
-    setText('healthTrendLabel', s.movementStatus || 'Live');
-    setText('healthStatusLabel', s.currentAirQuality || 'Optimal');
-    if(typeof s.overallScore === 'number'){
-      const overallDisplay = `${Math.round(s.overallScore)}%`;
-      setText('patientOverallScore', overallDisplay);
-      setText('patientOverallScoreCard', overallDisplay);
-      setText('patientDrawerOverall', overallDisplay);
-      setText('healthDonutCenter', overallDisplay);
-    } else {
-      setText('patientOverallScore', '--');
-      setText('patientOverallScoreCard', '--');
-      setText('patientDrawerOverall', '--');
-      setText('healthDonutCenter', '--');
-    }
-    const heroSummaryParts = [];
-    if(currentPatient && currentPatient.name){
-      heroSummaryParts.push(`Now viewing: ${currentPatient.name}`);
-    }
-    if(s.movementStatus){
-      heroSummaryParts.push(`Movement ${s.movementStatus}`);
-    }
-    if(s.currentAirQuality){
-      heroSummaryParts.push(`Environment ${s.currentAirQuality}`);
-    }
-    if(typeof s.overallScore === 'number'){
-      heroSummaryParts.push(`${Math.round(s.overallScore)}% overall`);
-    }
-    if(heroSummaryParts.length){
-      setText('heroPatientContext', heroSummaryParts.join(' | '));
-    } else if(currentPatient && currentPatient.name){
-      setText('heroPatientContext', `Monitoring live signals for ${currentPatient.name}`);
-    }
-    const found = patientsCache.find(p => String(p.id) === String(selectedPatientId));
-    if(found){
-      if(typeof s.overallScore === 'number') found.computed_score = s.overallScore;
-      if(s.movementStatus) found.movement_label = s.movementStatus;
-      if(s.currentAirQuality) found.environment_label = s.currentAirQuality;
-      renderPatientList();
-      updatePatientDrawer(found);
-    }
-    if(data.donutSlices) updateDonutFromSlices(data.donutSlices);
-    if(data.charts) updateTrendCharts(data.charts);
+    applyDashboardData(data);
   }catch(e){ console.error('[dashboard] initUser error', e); }
-}async function loadWeeklyInsights(){
+}
+
+function applyWeeklyInsights(info){
+  if(info && info.narrative){
+    setText('weeklyInsights', info.narrative);
+  } else if(info === null){
+    setText('weeklyInsights', 'No data available for the past week.');
+  }
+}
+
+async function loadWeeklyInsights(infoOverride){
   try{
-    const info = await apiGet('/api/weekly_insights', { patient_id: selectedPatientId });
-    if(info && info.narrative) setText('weeklyInsights', info.narrative);
+    const info = infoOverride || await apiGet('/api/weekly_insights', { patient_id: selectedPatientId });
+    applyWeeklyInsights(info);
   }catch(e){ console.error('[dashboard] loadWeeklyInsights error', e); }
 }
 
-async function loadLatestAndPredict(){
+async function loadLatestAndPredict(latestOverride, predictedOverride){
   try{
     setText('patientLatestUpdate', '--');
     setText('patientLatestVitals', '--');
@@ -458,7 +523,8 @@ async function loadLatestAndPredict(){
     setText('heroVitalsContext', 'Sync devices to refresh vitals');
     setText('heroMoodValue', '--');
     setText('heroMoodContext', 'Awaiting model prediction');
-    const latest = await apiGet('/api/latest_reading', { patient_id: selectedPatientId });
+    const useOverride = latestOverride !== undefined;
+    const latest = useOverride ? latestOverride : await apiGet('/api/latest_reading', { patient_id: selectedPatientId });
     if(!latest){
       setText('lastUpdatedText', 'No recent readings');
       setText('patientDrawerLastUpdate', '--');
@@ -491,9 +557,13 @@ async function loadLatestAndPredict(){
     setText('patientLatestVitals', vitalsText);
     setText('patientDrawerVitals', vitalsText);
     setText('heroVitalsContext', vitalsText);
-    const pred = await apiPost('/api/predict_mood', latest, { patient_id: selectedPatientId });
-    if(pred && typeof pred.predicted_mood === 'number'){
-      const moodLabel = moodNumberToLabel(pred.predicted_mood);
+    let predictedMood = predictedOverride;
+    if(predictedMood == null){
+      const pred = await apiPost('/api/predict_mood', latest, { patient_id: selectedPatientId });
+      predictedMood = pred && typeof pred.predicted_mood === 'number' ? pred.predicted_mood : null;
+    }
+    if(predictedMood != null){
+      const moodLabel = moodNumberToLabel(predictedMood);
       setText('predictedMoodValue', moodLabel);
       setText('patientDrawerMood', moodLabel);
       setText('heroMoodValue', moodLabel);
@@ -516,12 +586,59 @@ async function loadLatestAndPredict(){
   }
 }
 
+async function loadPatientBundle(){
+  if(!selectedPatientId){
+    return;
+  }
+  try{
+    const bundle = await apiGet('/api/patient_bundle', { patient_id: selectedPatientId });
+    if(!bundle){
+      return;
+    }
+    if(bundle.dashboard){
+      applyDashboardData(bundle.dashboard);
+    }
+    if(bundle.weekly_insights !== undefined){
+      applyWeeklyInsights(bundle.weekly_insights ? { narrative: bundle.weekly_insights } : null);
+    }
+    if(bundle.latest_reading !== undefined){
+      await loadLatestAndPredict(bundle.latest_reading, bundle.predicted_mood);
+    }
+    if(Array.isArray(bundle.checkins)){
+      checkinsCache = bundle.checkins;
+      renderCheckins(bundle.checkins);
+    }
+    if(Array.isArray(bundle.goals)){
+      goalsCache = bundle.goals;
+      renderGoals(bundle.goals);
+    }
+    if(Array.isArray(bundle.journal_entries)){
+      renderJournal(bundle.journal_entries);
+    }
+  }catch(e){
+    console.error('[dashboard] loadPatientBundle error', e);
+  }
+}
+
 async function loadStaff(){ try{ const list = await apiGet('/api/staff'); renderStaff(list); } catch(e){ console.error(e); } }
 function renderStaff(items){
   const ul = document.getElementById('staffList'); if(!ul) return; ul.innerHTML='';
   (items||[]).forEach(s=>{
     const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
-    li.innerHTML = `<span><strong>${s.name}</strong>  <code>${s.id}</code>  ${s.phone}</span>`;
+    const span = document.createElement('span');
+    const strong = document.createElement('strong');
+    strong.textContent = s?.name || '';
+    span.appendChild(strong);
+    if(s?.id){
+      span.appendChild(document.createTextNode(' | '));
+      const code = document.createElement('code');
+      code.textContent = s.id;
+      span.appendChild(code);
+    }
+    if(s?.phone){
+      span.appendChild(document.createTextNode(` | ${s.phone}`));
+    }
+    li.appendChild(span);
     ul.appendChild(li);
   });
 }
@@ -580,8 +697,25 @@ function renderShifts(items){
   (items||[]).forEach(sh=>{
     const li = document.createElement('li'); li.className='list-group-item';
     const days = (sh.days||[]).join(',');
-    const staff = (sh.staff_ids||[]).map(id=>`<code>${id}</code>`).join(', ');
-    li.innerHTML = `<strong>${sh.name}</strong>  ${sh.start}-${sh.end}  days [${days}]<br/>staff: ${staff}`;
+    const name = document.createElement('strong');
+    name.textContent = sh?.name || '';
+    li.appendChild(name);
+    li.appendChild(document.createTextNode(` | ${sh?.start || ''}-${sh?.end || ''} | days [${days}]`));
+    li.appendChild(document.createElement('br'));
+    li.appendChild(document.createTextNode('staff: '));
+    const staffIds = Array.isArray(sh?.staff_ids) ? sh.staff_ids : [];
+    if(!staffIds.length){
+      li.appendChild(document.createTextNode('none'));
+    }else{
+      staffIds.forEach((id, idx) => {
+        const code = document.createElement('code');
+        code.textContent = String(id);
+        li.appendChild(code);
+        if(idx < staffIds.length - 1){
+          li.appendChild(document.createTextNode(', '));
+        }
+      });
+    }
     ul.appendChild(li);
   });
 }
@@ -600,6 +734,9 @@ async function addShift(){
 }
 
 function initFacilityUi(){
+  if(!currentUser || (currentUser.id !== 'super_admin' && currentUser.id !== 'facility_admin')){
+    return;
+  }
   const addBedBtn = document.getElementById('addBedBtn');
   if(addBedBtn && !addBedBtn.dataset.bound){
     addBedBtn.dataset.bound = '1';
@@ -647,10 +784,16 @@ function initSidebarToggle(){
   const closeSidebar = () => {
     document.body.classList.remove('sidebar-open');
     sidebarOpen = false;
+    if(toggle){
+      toggle.setAttribute('aria-expanded', 'false');
+    }
   };
   const openSidebar = () => {
     document.body.classList.add('sidebar-open');
     sidebarOpen = true;
+    if(toggle){
+      toggle.setAttribute('aria-expanded', 'true');
+    }
   };
   if(toggle){
     toggle.addEventListener('click', () => {
@@ -668,8 +811,7 @@ function initSidebarToggle(){
   }));
   window.addEventListener('resize', () => {
     if(window.innerWidth > 992){
-      document.body.classList.remove('sidebar-open');
-      sidebarOpen = false;
+      closeSidebar();
     }
   });
 }
@@ -688,7 +830,20 @@ function renderStaff(items){
   const ul = document.getElementById('staffList'); if(!ul) return; ul.innerHTML='';
   (items||[]).forEach(s=>{
     const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
-    li.innerHTML = `<span><strong>${s.name}</strong> | <code>${s.id}</code> | ${s.phone}</span>`;
+    const span = document.createElement('span');
+    const strong = document.createElement('strong');
+    strong.textContent = s?.name || '';
+    span.appendChild(strong);
+    if(s?.id){
+      span.appendChild(document.createTextNode(' | '));
+      const code = document.createElement('code');
+      code.textContent = s.id;
+      span.appendChild(code);
+    }
+    if(s?.phone){
+      span.appendChild(document.createTextNode(` | ${s.phone}`));
+    }
+    li.appendChild(span);
     ul.appendChild(li);
   });
 }
@@ -697,8 +852,25 @@ function renderShifts(items){
   (items||[]).forEach(sh=>{
     const li = document.createElement('li'); li.className='list-group-item';
     const days = (sh.days||[]).join(',');
-    const staff = (sh.staff_ids||[]).map(id=>`<code>${id}</code>`).join(', ');
-    li.innerHTML = `<strong>${sh.name}</strong> | ${sh.start}-${sh.end} | days [${days}]<br/>staff: ${staff}`;
+    const name = document.createElement('strong');
+    name.textContent = sh?.name || '';
+    li.appendChild(name);
+    li.appendChild(document.createTextNode(` | ${sh?.start || ''}-${sh?.end || ''} | days [${days}]`));
+    li.appendChild(document.createElement('br'));
+    li.appendChild(document.createTextNode('staff: '));
+    const staffIds = Array.isArray(sh?.staff_ids) ? sh.staff_ids : [];
+    if(!staffIds.length){
+      li.appendChild(document.createTextNode('none'));
+    }else{
+      staffIds.forEach((id, idx) => {
+        const code = document.createElement('code');
+        code.textContent = String(id);
+        li.appendChild(code);
+        if(idx < staffIds.length - 1){
+          li.appendChild(document.createTextNode(', '));
+        }
+      });
+    }
     ul.appendChild(li);
   });
 }
@@ -710,7 +882,14 @@ function renderUsers(items){
   (items||[]).forEach(u=>{
     const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
     const left = document.createElement('span');
-    left.innerHTML = `<strong>${u.email}</strong>  ${u.role}${u.facility_id!=null?`  facility ${u.facility_id}`:''}`;
+    const strong = document.createElement('strong');
+    strong.textContent = u?.email || '';
+    left.appendChild(strong);
+    const roleText = u?.role ? ` ${u.role}` : '';
+    const facilityText = u?.facility_id != null ? ` facility ${u.facility_id}` : '';
+    if(roleText || facilityText){
+      left.appendChild(document.createTextNode(`${roleText}${facilityText}`));
+    }
     const right = document.createElement('div');
     const del = document.createElement('button'); del.className='btn btn-sm btn-outline-danger'; del.textContent='Delete'; del.onclick=async ()=>{ if(confirm('Delete user?')){ await apiDeleteUser(u.email); loadUsers(); } };
     right.appendChild(del);
@@ -732,7 +911,7 @@ async function addUser(){
   loadUsers();
 }
 async function apiDeleteUser(email){
-  const r = await fetch(`/api/users/${encodeURIComponent(email)}`, { method:'DELETE', credentials:'same-origin' });
+  const r = await fetch(`/api/users/${encodeURIComponent(email)}`, { method:'DELETE', headers: withCsrf(), credentials:'same-origin' });
   if(r.status === 401){ window.location.href='/login'; return; }
   if(!r.ok){ console.error('DELETE /api/users failed'); }
 }
@@ -796,14 +975,33 @@ function renderCheckins(items){
     const header = document.createElement('div');
     header.className = 'checkin-item-header';
     const moodLabel = moodNumberToLabel(Number(item.mood));
-    header.innerHTML = `<span>${moodLabel} <span class="badge bg-light text-dark ms-2">Score ${item.mood ?? '--'}</span></span><span class="text-muted small">${formatDateTime(ts)}</span>`;
+    const headerLeft = document.createElement('span');
+    headerLeft.appendChild(document.createTextNode(moodLabel));
+    headerLeft.appendChild(document.createTextNode(' '));
+    const scoreBadge = document.createElement('span');
+    scoreBadge.className = 'badge bg-light text-dark ms-2';
+    scoreBadge.textContent = `Score ${item.mood ?? '--'}`;
+    headerLeft.appendChild(scoreBadge);
+    const headerRight = document.createElement('span');
+    headerRight.className = 'text-muted small';
+    headerRight.textContent = formatDateTime(ts);
+    header.appendChild(headerLeft);
+    header.appendChild(headerRight);
     const meta = document.createElement('div');
     meta.className = 'checkin-item-meta';
-    meta.innerHTML = `
-      <span><i class="fas fa-user-circle me-1"></i>${item.user || 'Unknown'}</span>
-      <span><i class="fas fa-bolt me-1"></i>${(item.stress || 'Not captured').toString().replace(/^\w/, c=>c.toUpperCase())}</span>
-      <span><i class="far fa-clock me-1"></i>${formatRelativeTime(ts)}</span>
-    `;
+    const buildMeta = (iconClass, text) => {
+      const span = document.createElement('span');
+      const icon = document.createElement('i');
+      icon.className = iconClass;
+      span.appendChild(icon);
+      span.appendChild(document.createTextNode(text));
+      return span;
+    };
+    const stressRaw = (item.stress || 'Not captured').toString();
+    const stressText = stressRaw ? stressRaw.replace(/^\w/, c=>c.toUpperCase()) : 'Not captured';
+    meta.appendChild(buildMeta('fas fa-user-circle me-1', item.user || 'Unknown'));
+    meta.appendChild(buildMeta('fas fa-bolt me-1', stressText));
+    meta.appendChild(buildMeta('far fa-clock me-1', formatRelativeTime(ts)));
     li.appendChild(header);
     li.appendChild(meta);
     if(item.notes){
@@ -845,8 +1043,7 @@ async function submitCheckin(evt){
     await apiPost('/api/checkins', payload, { patient_id: selectedPatientId });
     showToast({ title:'Check-in saved', message:'Mood check-in recorded successfully.' });
     form.reset();
-    loadCheckins();
-    loadDashboardData();
+    loadPatientBundle();
   }catch(e){
     console.error('[dashboard] submitCheckin error', e);
     showToast({ title:'Save failed', message:'We could not save this check-in. Please try again.', variant:'error' });
@@ -878,6 +1075,7 @@ function renderGoals(items){
   list.innerHTML = '';
   const data = Array.isArray(items) ? items : [];
   if(!data.length){
+    empty.textContent = selectedPatientId ? 'No goals created yet.' : 'Select a patient to view goals.';
     empty.classList.remove('d-none');
     return;
   }
@@ -908,10 +1106,16 @@ function renderGoals(items){
       }
       return due.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
     })();
-    dueSpan.innerHTML = `<i class="far fa-calendar-alt me-1"></i>${dueText}`;
+    const dueIcon = document.createElement('i');
+    dueIcon.className = 'far fa-calendar-alt me-1';
+    dueSpan.appendChild(dueIcon);
+    dueSpan.appendChild(document.createTextNode(dueText));
     meta.appendChild(dueSpan);
     const createdSpan = document.createElement('span');
-    createdSpan.innerHTML = `<i class="far fa-clock me-1"></i>${formatRelativeTime(goal.created_at) || 'recently'}`;
+    const createdIcon = document.createElement('i');
+    createdIcon.className = 'far fa-clock me-1';
+    createdSpan.appendChild(createdIcon);
+    createdSpan.appendChild(document.createTextNode(formatRelativeTime(goal.created_at) || 'recently'));
     meta.appendChild(createdSpan);
     info.appendChild(meta);
     const actions = document.createElement('div');
@@ -1192,9 +1396,7 @@ const commandPaletteActions = [
     label: 'Refresh dashboard data',
     subtitle: 'Reload metrics for the current patient',
     run: () => {
-      loadDashboardData();
-      loadWeeklyInsights();
-      loadLatestAndPredict();
+      loadPatientBundle();
     }
   },
   {
@@ -1335,9 +1537,14 @@ function openPatientDrawer(){
     return;
   }
   patientDrawerOpen = true;
+  drawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   patientDrawerEl.classList.add('active');
   patientDrawerEl.setAttribute('aria-hidden', 'false');
   document.body.classList.add('drawer-open');
+  if(drawerFocusCleanup){
+    drawerFocusCleanup();
+  }
+  drawerFocusCleanup = trapFocus(patientDrawerEl);
   const focusTarget = patientDrawerEl.querySelector('[data-drawer-focus]') || patientDrawerEl.querySelector('button, [href], input, select, textarea');
   if(focusTarget){
     focusTarget.focus({ preventScroll: true });
@@ -1352,6 +1559,15 @@ function closePatientDrawer(){
   patientDrawerEl.classList.remove('active');
   patientDrawerEl.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('drawer-open');
+  if(drawerFocusCleanup){
+    drawerFocusCleanup();
+    drawerFocusCleanup = null;
+  }
+  const focusTarget = drawerReturnFocus;
+  drawerReturnFocus = null;
+  if(focusTarget && typeof focusTarget.focus === 'function'){
+    focusTarget.focus({ preventScroll: true });
+  }
 }
 
 function resetPatientDrawer(){
@@ -1442,7 +1658,9 @@ function updatePatientDrawer(patient){
   const avatar = document.getElementById('patientDrawerAvatar');
   if(avatar){
     const fallback = avatar.dataset.defaultSrc || avatar.getAttribute('data-default-src') || avatar.src;
-    const avatarUrl = patient.avatar_url || (patient.name ? buildAvatarUrl(patient.name) : null) || fallback;
+    const avatarUrl = (patient.avatar_url && isLocalAssetUrl(patient.avatar_url))
+      ? patient.avatar_url
+      : (patient.name ? buildAvatarUrl(patient.name) : null) || fallback;
     avatar.src = avatarUrl;
     avatar.alt = patient.name ? `${patient.name} avatar` : 'Patient avatar';
   }
@@ -2008,7 +2226,7 @@ function renderPatientNode(meta){
 
   const avatar = document.createElement('div');
   avatar.className = 'patient-list-avatar';
-  if(patient.avatar_url){
+  if(patient.avatar_url && isLocalAssetUrl(patient.avatar_url)){
     avatar.style.backgroundImage = `url(${patient.avatar_url})`;
   }else{
     avatar.textContent = getPatientInitials(patient.name);
@@ -2247,6 +2465,14 @@ function resetPatientCard(){
     avatar.src = fallback;
     avatar.alt = 'Patient avatar';
   }
+  updatePatientEmptyStates();
+}
+
+function updatePatientEmptyStates(){
+  const trendsEmpty = document.getElementById('trendsEmpty');
+  if(trendsEmpty){
+    trendsEmpty.classList.toggle('d-none', Boolean(selectedPatientId));
+  }
 }
 
 function applyPatientCard(patient){
@@ -2298,7 +2524,9 @@ function applyPatientCard(patient){
   const avatar = document.getElementById('patientAvatar');
   if(avatar){
     const fallback = avatar.dataset.defaultSrc || avatar.getAttribute('data-default-src') || avatar.src;
-    const avatarUrl = patient.avatar_url || (patient.name ? buildAvatarUrl(patient.name) : null) || fallback;
+    const avatarUrl = (patient.avatar_url && isLocalAssetUrl(patient.avatar_url))
+      ? patient.avatar_url
+      : (patient.name ? buildAvatarUrl(patient.name) : null) || fallback;
     avatar.src = avatarUrl;
     avatar.alt = patient.name ? `${patient.name} avatar` : 'Patient avatar';
   }
@@ -2321,16 +2549,12 @@ function updatePatientDetails(){
 }
 
 function afterPatientChanged(){
-  loadDashboardData();
-  loadWeeklyInsights();
-  loadLatestAndPredict();
   initFacilityUi();
   if(currentUser && (currentUser.id === 'super_admin' || currentUser.id === 'facility_admin')){
     initAdminUi();
   }
-  loadJournal();
-  loadCheckins();
-  loadGoals();
+  loadPatientBundle();
+  updatePatientEmptyStates();
 }
 
 // ----- Command Palette -----
@@ -2404,6 +2628,10 @@ function openCommandPalette(prefill){
   commandPaletteEl.classList.add('open');
   commandPaletteEl.setAttribute('aria-hidden', 'false');
   document.body.classList.add('command-palette-open');
+  if(commandPaletteFocusCleanup){
+    commandPaletteFocusCleanup();
+  }
+  commandPaletteFocusCleanup = trapFocus(commandPaletteEl);
   const value = prefill || '';
   if(commandPaletteInput){
     commandPaletteInput.value = value;
@@ -2422,6 +2650,10 @@ function closeCommandPalette(){
   commandPaletteEl.classList.remove('open');
   commandPaletteEl.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('command-palette-open');
+  if(commandPaletteFocusCleanup){
+    commandPaletteFocusCleanup();
+    commandPaletteFocusCleanup = null;
+  }
   if(commandPaletteInput){
     commandPaletteInput.value = '';
     commandPaletteInput.setAttribute('aria-expanded', 'false');
@@ -2714,7 +2946,7 @@ function initButtons(){
       btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i> Syncing...';
       btn.disabled = true;
       try{
-        await Promise.all([loadDashboardData(), loadWeeklyInsights(), loadLatestAndPredict()]);
+        await loadPatientBundle();
         showToast({ title:'Sync complete', message:'Latest device readings have been refreshed.' });
       }catch(e){
         console.error('[dashboard] sync refresh failed', e);
@@ -2732,6 +2964,40 @@ function initButtons(){
     refreshCheckinsBtn.dataset.bound = '1';
     refreshCheckinsBtn.addEventListener('click', () => loadCheckins());
   }
+  const openPaletteBtn = document.getElementById('openCommandPaletteBtn');
+  if(openPaletteBtn && !openPaletteBtn.dataset.bound){
+    openPaletteBtn.dataset.bound = '1';
+    openPaletteBtn.addEventListener('click', () => openCommandPalette(''));
+  }
+  const roleItems = document.querySelectorAll('.role-switcher-item');
+  roleItems.forEach(item => {
+    if(item.dataset.bound){
+      return;
+    }
+    item.dataset.bound = '1';
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      const roleId = item.getAttribute('data-role');
+      if(roleId && roles[roleId]){
+        switchRole(roleId);
+      }
+    });
+  });
+  const roleCards = document.querySelectorAll('.role-option[data-role]');
+  roleCards.forEach(card => {
+    if(card.dataset.bound){
+      return;
+    }
+    card.dataset.bound = '1';
+    card.addEventListener('click', () => {
+      const roleId = card.getAttribute('data-role');
+      if(roleId && roles[roleId]){
+        switchRole(roleId);
+        roleCards.forEach(el => el.classList.remove('active'));
+        card.classList.add('active');
+      }
+    });
+  });
 }
 
 function initGoalModal(){
@@ -2806,19 +3072,23 @@ document.addEventListener('DOMContentLoaded', () => {
   initPatientDrawer();
   initUser().then(() => {
     initPatientSelector();
+    initFacilityUi();
+    initAdminUi();
+    updatePatientEmptyStates();
   }).catch(err => {
     console.error('[dashboard] initUser promise rejected', err);
     initPatientSelector();
+    initFacilityUi();
+    updatePatientEmptyStates();
   });
   setInterval(() => {
     if(document.hidden){
       return;
     }
-    loadDashboardData();
-    loadWeeklyInsights();
-    loadLatestAndPredict();
-    loadCheckins();
-    loadGoals();
+    if(!selectedPatientId){
+      return;
+    }
+    loadPatientBundle();
   }, 60000);
 });
 

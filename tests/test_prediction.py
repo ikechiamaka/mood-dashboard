@@ -6,6 +6,7 @@ import pytest
 
 # Simple app import
 import app as flask_app
+import db as db_module
 
 @pytest.fixture
 def client():
@@ -66,3 +67,34 @@ def test_dashboard_data(client, monkeypatch):
     data = resp.get_json()
     assert 'summary' in data
     assert 'donutSlices' in data
+
+
+def test_staff_cannot_list_staff(client):
+    with client.session_transaction() as sess:
+        sess['user'] = 'staff@example.com'
+        sess['role'] = 'staff'
+    resp = client.get('/api/staff')
+    assert resp.status_code == 403
+
+
+def test_csrf_required_for_api_post(client):
+    prev_testing = flask_app.app.config.get('TESTING')
+    flask_app.app.config['TESTING'] = False
+    try:
+        patient = db_module.db_insert_patient('Test Patient', None, None)
+        patient_id = patient.get('id')
+        with client.session_transaction() as sess:
+            sess['user'] = 'staff@example.com'
+            sess['role'] = 'staff'
+            sess['assigned_patient_ids'] = [patient_id]
+            sess['csrf_token'] = 'testtoken'
+        resp = client.post('/api/goals', json={'patient_id': patient_id, 'title': 'Goal'})
+        assert resp.status_code == 403
+        resp = client.post(
+            '/api/goals',
+            json={'patient_id': patient_id, 'title': 'Goal'},
+            headers={'X-CSRF-Token': 'testtoken'}
+        )
+        assert resp.status_code == 201
+    finally:
+        flask_app.app.config['TESTING'] = prev_testing
