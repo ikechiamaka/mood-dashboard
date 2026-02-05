@@ -22,14 +22,22 @@
           class="fas fa-tools"></i><span>Admin</span></a></li>
   </ul>
   <div class="p-3">
-    <button id="syncWearable" class="btn btn-sm btn-light w-100"><i class="fas fa-sync-alt me-2"></i>Sync Devices
-      Now</button>
+    <button id="syncWearable" class="btn btn-sm btn-light w-100 sidebar-action-btn" data-label="Sync Devices">
+      <i class="fas fa-sync-alt me-2"></i>
+      <span class="sidebar-action-text">Sync Devices Now</span>
+    </button>
   </div>
   <div class="p-3 pt-0">
-    <button id="addGoalBtn" type="button" class="btn btn-sm btn-primary w-100" data-bs-toggle="modal" data-bs-target="#goalModal"><i class="fas fa-plus me-2"></i>Add Goal</button>
+    <button id="addGoalBtn" type="button" class="btn btn-sm btn-primary w-100 sidebar-action-btn" data-bs-toggle="modal" data-bs-target="#goalModal" data-label="Add Goal">
+      <i class="fas fa-plus me-2"></i>
+      <span class="sidebar-action-text">Add Goal</span>
+    </button>
   </div>
   <div class="p-3">
-    <a class="btn btn-outline-light btn-sm w-100" href="/logout"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
+    <a class="btn btn-outline-light btn-sm w-100 sidebar-action-btn" href="/logout" data-label="Logout">
+      <i class="fas fa-sign-out-alt me-2"></i>
+      <span class="sidebar-action-text">Logout</span>
+    </a>
   </div>
 </div>
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -71,7 +79,7 @@
       <div class="navbar-controls-right">
         <div class="dropdown">
           <button class="btn btn-sm btn-primary dropdown-toggle d-flex align-items-center profile-btn" type="button"
-            id="profileDropdown" data-bs-toggle="dropdown">
+            id="profileDropdown" data-bs-toggle="dropdown" data-label="Profile">
             <img id="currentUserAvatar" src="{{ url_for('static', filename='pic.jpg') }}" class="rounded-circle me-2"
               style="width:30px;height:30px;object-fit:cover;" />
             <span id="currentUserName">Blaine Cottrell</span>
