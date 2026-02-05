@@ -5,7 +5,7 @@ import os
 import re
 import time
 import joblib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from dotenv import load_dotenv
 try:
@@ -143,6 +143,16 @@ def handle_large_upload(_err):
 from sklearn.dummy import DummyClassifier
 import warnings
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'mood_model.pkl')
+ALT_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'optimized_mood_predictor.pkl')
+
+
+def _build_dummy_model():
+    dummy = DummyClassifier(strategy='most_frequent')
+    synth = pd.DataFrame([[0] * len(FEATURE_COLUMNS)], columns=FEATURE_COLUMNS)
+    dummy.fit(synth, [3])
+    return dummy
+
+
 with warnings.catch_warnings(record=True) as wlist:
     try:
         mood_model = joblib.load(MODEL_PATH)
@@ -151,11 +161,17 @@ with warnings.catch_warnings(record=True) as wlist:
         for w in filtered:
             logging.warning(w.message)
     except Exception as e:
-        logging.warning(f"Failed to load model at {MODEL_PATH}: {e}. Using DummyClassifier.")
-        dummy = DummyClassifier(strategy='most_frequent')
-        synth = pd.DataFrame([[0]*len(FEATURE_COLUMNS)], columns=FEATURE_COLUMNS)
-        dummy.fit(synth, [3])
-        mood_model = dummy
+        logging.warning(f"Failed to load model at {MODEL_PATH}: {e}.")
+        if os.path.exists(ALT_MODEL_PATH):
+            try:
+                mood_model = joblib.load(ALT_MODEL_PATH)
+                logging.warning(f"Loaded fallback model at {ALT_MODEL_PATH}.")
+            except Exception as e2:
+                logging.warning(f"Failed to load fallback model at {ALT_MODEL_PATH}: {e2}. Using DummyClassifier.")
+                mood_model = _build_dummy_model()
+        else:
+            logging.warning("Fallback model not found. Using DummyClassifier.")
+            mood_model = _build_dummy_model()
 
 
 AVATAR_UPLOAD_SUBDIR = 'uploads'
@@ -363,7 +379,7 @@ def _seed_demo_logs_if_needed():
         except Exception:
             pass
     base_user = os.getenv('DEMO_SUPER_EMAIL', 'superadmin@demo.com')
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     phrases = [
         'had a calm afternoon walk.',
         'completed their breathing exercises.',
@@ -544,7 +560,7 @@ def checkins():
             return jsonify({'error': 'invalid patient_id'}), 400
         if not _patient_access_ok(pid_int):
             return jsonify({'error': 'Forbidden'}), 403
-        ts = _parse_iso_timestamp(payload.get('timestamp')) or datetime.utcnow().isoformat()
+        ts = _parse_iso_timestamp(payload.get('timestamp')) or datetime.now(timezone.utc).isoformat()
         mood = _coerce_int(payload.get('mood'), low=1, high=6)
         if mood is None:
             return jsonify({'error': 'mood must be 1-6'}), 400
@@ -609,7 +625,7 @@ def goals_collection():
     if due_date_raw and not due_date:
         return jsonify({'error': 'invalid due_date'}), 400
     notify = 1 if payload.get('notify') else 0
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
     created = db_insert_goal(
         goal_id=uuid4().hex,
         patient_id=pid_filter,
@@ -663,7 +679,7 @@ def goal_detail(goal_id: str):
         target[key] = value
         updated = True
     if updated:
-        target['updated_at'] = datetime.utcnow().isoformat()
+        target['updated_at'] = datetime.now(timezone.utc).isoformat()
         saved = db_update_goal(goal_id, target)
         _audit_event('update_goal', str(target.get('patient_id')))
         return jsonify(saved or target)
@@ -687,7 +703,7 @@ def journal_entries():
 
     if request.method == 'POST':
         payload = request.get_json() or {}
-        ts = _parse_iso_timestamp(payload.get('timestamp')) or datetime.utcnow().isoformat()
+        ts = _parse_iso_timestamp(payload.get('timestamp')) or datetime.now(timezone.utc).isoformat()
         text_value = _clean_text(payload.get('text'), MAX_JOURNAL_TEXT_LEN)
         if not text_value:
             return jsonify({'error': 'text required'}), 400
@@ -722,7 +738,7 @@ def preprocess_for_prediction(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _record_support_event(kind: str, details: Dict[str, Any]) -> None:
-    submitted_at = datetime.utcnow().isoformat()
+    submitted_at = datetime.now(timezone.utc).isoformat()
     db_insert_support_request(
         kind=kind,
         email=(details.get('email') or '').strip().lower(),
@@ -1077,7 +1093,7 @@ def _ensure_bed_readings(bed_id: str, patient_id: int, hours: int = 24) -> None:
         cnt = int(cur.fetchone()[0])
         if cnt > 0:
             return
-        base = dt.utcnow()
+        base = dt.now(timezone.utc)
         rows = []
         for h in range(hours, -1, -1):
             t = base - timedelta(hours=h)
@@ -1248,7 +1264,7 @@ def dashboard_data():
     if pid_raw and not _patient_access_ok(pid_raw):
         return jsonify({'error': 'Forbidden'}), 403
     # Use current minute as cache marker for lightweight TTL
-    marker = int(dt.utcnow().timestamp() // 60)
+    marker = int(dt.now(timezone.utc).timestamp() // 60)
     try:
         pid = int(pid_raw) if pid_raw else None
     except Exception:
@@ -1377,7 +1393,7 @@ def predict_mood():
     except ValueError as ve:
         return jsonify({'error': str(ve)}), 400
     # Persist per-patient prediction history (if patient context provided)
-    ts_value = clean.get('timestamp') or datetime.utcnow().isoformat()
+    ts_value = clean.get('timestamp') or datetime.now(timezone.utc).isoformat()
     try:
         db_insert_prediction(
             patient_id=pid_val,
@@ -1409,7 +1425,7 @@ def patient_bundle():
         return jsonify({'error': 'invalid patient_id'}), 400
     if not _patient_access_ok(pid):
         return jsonify({'error': 'Forbidden'}), 403
-    marker = int(dt.utcnow().timestamp() // 60)
+    marker = int(dt.now(timezone.utc).timestamp() // 60)
     dashboard = _cached_aggregates(marker, pid)
     weekly = _build_weekly_insights_payload(pid)
     latest = _latest_reading_payload(pid)
@@ -1418,7 +1434,7 @@ def patient_bundle():
         try:
             pred, clean = _predict_mood_from_payload(latest.copy())
             predicted_mood = pred
-            ts_value = clean.get('timestamp') or datetime.utcnow().isoformat()
+            ts_value = clean.get('timestamp') or datetime.now(timezone.utc).isoformat()
             db_insert_prediction(
                 patient_id=pid,
                 timestamp=ts_value,
@@ -1622,8 +1638,8 @@ def _hhmm_to_minutes(s: str) -> int:
 
 
 def _on_duty_phone_numbers() -> list[str]:
-    from datetime import datetime as _dt
-    now = _dt.utcnow()
+    from datetime import datetime as _dt, timezone as _tz
+    now = _dt.now(_tz.utc)
     day = now.weekday()  # 0=Mon
     minutes = now.hour * 60 + now.minute
     sch = db_list_schedule(None)

@@ -1,7 +1,7 @@
 import os
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 DB_DIR = os.path.join(os.path.dirname(__file__), 'data')
@@ -239,7 +239,7 @@ def _seed_patient_readings(conn: sqlite3.Connection, patient_id: int, bed_id: st
         cur = conn.execute('SELECT COUNT(1) FROM readings WHERE bed_id = ?', (bed_id,))
         if int(cur.fetchone()[0]) > 0:
             return
-        base = datetime.utcnow()
+        base = datetime.now(timezone.utc)
         rows: list[tuple] = []
         patient_offset = (patient_id or 0) % 7
         temp_base = 68.0 + patient_offset
@@ -1023,7 +1023,7 @@ def _import_csv_checkins(conn: sqlite3.Connection) -> None:
                 mood_val = int(float(mood)) if mood not in (None, '') else None
             except Exception:
                 mood_val = None
-            created_at = timestamp or datetime.utcnow().isoformat()
+            created_at = timestamp or datetime.now(timezone.utc).isoformat()
             rows.append((user, patient_id, timestamp or created_at, mood_val, stress, notes, created_at))
     if not rows:
         return
@@ -1057,7 +1057,7 @@ def _import_csv_journal(conn: sqlite3.Connection) -> None:
                 mood_val = int(float(mood)) if mood not in (None, '') else None
             except Exception:
                 mood_val = None
-            created_at = timestamp or datetime.utcnow().isoformat()
+            created_at = timestamp or datetime.now(timezone.utc).isoformat()
             rows.append((user, patient_id, timestamp or created_at, mood_val, text, created_at))
     if not rows:
         return
@@ -1098,7 +1098,7 @@ def _import_json_goals(conn: sqlite3.Connection) -> None:
         status = (item.get('status') or 'active').strip()
         due_date = (item.get('due_date') or '').strip() or None
         notify = 1 if item.get('notify') else 0
-        created_at = (item.get('created_at') or '').strip() or datetime.utcnow().isoformat()
+        created_at = (item.get('created_at') or '').strip() or datetime.now(timezone.utc).isoformat()
         updated_at = (item.get('updated_at') or '').strip() or created_at
         created_by = (item.get('created_by') or '').strip() or None
         rows.append((goal_id, patient_id, title, status, due_date, notify, created_at, updated_at, created_by))
@@ -1146,7 +1146,7 @@ def _import_csv_predictions(conn: sqlite3.Connection) -> None:
             radar = _to_int(row.get('Radar'))
             ultrasonic = _to_float(row.get('Ultrasonic'))
             song = _to_int(row.get('song'))
-            created_at = timestamp or datetime.utcnow().isoformat()
+            created_at = timestamp or datetime.now(timezone.utc).isoformat()
             rows.append((patient_id, timestamp or created_at, predicted, temperature, humidity, mq2, bh, radar, ultrasonic, song, created_at))
     if not rows:
         return
@@ -1177,7 +1177,7 @@ def _import_json_support_requests(conn: sqlite3.Connection) -> None:
         email = (details.get('email') or '').strip().lower()
         if not kind or not email:
             continue
-        submitted_at = (item.get('submitted_at') or '').strip() or datetime.utcnow().isoformat()
+        submitted_at = (item.get('submitted_at') or '').strip() or datetime.now(timezone.utc).isoformat()
         rows.append((
             kind,
             email,

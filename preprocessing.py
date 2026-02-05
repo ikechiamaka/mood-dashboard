@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 import numpy as np
+from pandas.api.types import is_numeric_dtype
 
 # Ordered categorical labels used in binning so training & inference align
 DAY_PART_BINS = [-1, 5, 9, 16, 23]
@@ -64,7 +65,7 @@ def engineer_features(df: pd.DataFrame, drop_original_timestamp: bool = False) -
     # MQ-2 mapping: allow both already-numeric & categorical
     if 'MQ-2' in df.columns:
         # Only map if not numeric
-        if not np.issubdtype(df['MQ-2'].dtype, np.number):
+        if not is_numeric_dtype(df['MQ-2']):
             df['MQ-2'] = df['MQ-2'].map({'OK': 0, 'N_OK': 1})
 
     if drop_original_timestamp:
