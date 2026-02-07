@@ -12,6 +12,7 @@
           class="fas fa-home"></i><span>Dashboard</span></a></li>
     <li class="sidebar-item"><a href="#healthMetrics" class="sidebar-link"><i class="fas fa-heartbeat"></i><span>Health
           Metrics</span></a></li>
+    <li class="sidebar-item"><a href="#bedsMonitoring" class="sidebar-link"><i class="fas fa-bed"></i><span>Beds</span></a></li>
     <li class="sidebar-item"><a href="#trendsSection" class="sidebar-link"><i
           class="fas fa-chart-line"></i><span>Trends</span></a></li>
     <li class="sidebar-item"><a href="#journalSection" class="sidebar-link"><i
@@ -239,6 +240,110 @@
       <i class="fas fa-exclamation-triangle me-2 text-danger"></i>
       <strong>Staff Access Restriction:</strong> You can only view data for patients assigned to you.
     </div>
+
+    <section id="bedsMonitoring" class="card-custom mb-4">
+      <div class="d-flex align-items-center justify-content-between mb-3">
+        <div>
+          <div class="card-title mb-1"><i class="fas fa-bed me-2"></i>Bed Monitoring</div>
+          <p class="text-muted small mb-0">Live occupancy, fall events, vital trends, and alert routing by on-duty staff.</p>
+        </div>
+      </div>
+      <div class="row g-3">
+        <div class="col-xl-4">
+          <div class="bed-roster-card">
+            <div class="bed-roster-header">
+              <div class="d-flex align-items-center justify-content-between gap-2">
+                <h6 class="mb-0 text-uppercase text-muted small">Beds</h6>
+                <span id="bedsRosterCount" class="patient-list-count">0</span>
+              </div>
+              <div class="input-group input-group-sm bed-search mt-2">
+                <span class="input-group-text"><i class="fas fa-magnifying-glass"></i></span>
+                <input id="bedsSearchInput" type="text" class="form-control" placeholder="Search label, room, patient..." autocomplete="off" />
+                <button id="bedsClearSearch" class="btn btn-outline-secondary" type="button" aria-label="Clear bed search">
+                  <i class="fas fa-xmark"></i>
+                </button>
+              </div>
+              <div class="d-flex flex-wrap gap-2 mt-2 align-items-center justify-content-between">
+                <div class="btn-group btn-group-sm" role="group" aria-label="Bed filters">
+                  <button type="button" class="btn btn-outline-primary bed-filter-btn active" data-filter="all">All</button>
+                  <button type="button" class="btn btn-outline-primary bed-filter-btn" data-filter="occupied">Occupied</button>
+                  <button type="button" class="btn btn-outline-primary bed-filter-btn" data-filter="fall">Fall</button>
+                  <button type="button" class="btn btn-outline-primary bed-filter-btn" data-filter="stale">Stale</button>
+                </div>
+                <select id="bedsSortSelect" class="form-select form-select-sm bed-sort">
+                  <option value="last_seen">Sort: Last seen</option>
+                  <option value="label">Sort: Label</option>
+                  <option value="room">Sort: Room</option>
+                </select>
+              </div>
+              <div id="bedsRosterMeta" class="text-muted small mt-2">Showing 0 of 0</div>
+            </div>
+            <div class="bed-roster-scroll mt-2">
+              <div id="bedsRosterEmpty" class="text-muted small py-4 text-center">No beds available.</div>
+              <div id="bedsRosterNoMatch" class="text-muted small py-4 text-center d-none">No beds match your search.</div>
+              <ul id="bedsRosterList" class="list-unstyled mb-0"></ul>
+            </div>
+          </div>
+        </div>
+        <div class="col-xl-8">
+          <div class="bed-detail-card">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+              <div>
+                <h5 id="bedDetailTitle" class="mb-1">Select a bed</h5>
+                <p id="bedDetailMeta" class="text-muted small mb-0">Choose a bed to load telemetry and alerts.</p>
+              </div>
+              <div id="bedDetailLastSeen" class="text-muted small">Last seen: --</div>
+            </div>
+            <div class="row g-2 mb-3">
+              <div class="col-md-3 col-6"><div class="bed-kpi"><span>Presence</span><strong id="bedKpiPresence">--</strong></div></div>
+              <div class="col-md-3 col-6"><div class="bed-kpi"><span>Fall</span><strong id="bedKpiFall">--</strong></div></div>
+              <div class="col-md-3 col-6"><div class="bed-kpi"><span>RR</span><strong id="bedKpiRr">--</strong></div></div>
+              <div class="col-md-3 col-6"><div class="bed-kpi"><span>HR</span><strong id="bedKpiHr">--</strong></div></div>
+            </div>
+            <div class="row g-3">
+              <div class="col-md-6">
+                <div class="bed-chart-shell">
+                  <div class="bed-chart-title"><span>Respiratory Rate</span><span class="text-muted small">Last 6h</span></div>
+                  <div class="trend-chart"><canvas id="bedRrChart"></canvas></div>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="bed-chart-shell">
+                  <div class="bed-chart-title"><span>Heart Rate</span><span class="text-muted small">Last 6h</span></div>
+                  <div class="trend-chart"><canvas id="bedHrChart"></canvas></div>
+                </div>
+              </div>
+              <div class="col-12">
+                <div class="bed-chart-shell">
+                  <div class="bed-chart-title"><span>Presence + Fall</span><span class="text-muted small">Last 6h</span></div>
+                  <div class="trend-chart"><canvas id="bedPresenceChart"></canvas></div>
+                </div>
+              </div>
+            </div>
+            <div class="row g-3 mt-1">
+              <div class="col-md-6">
+                <div class="bed-subpanel">
+                  <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h6 class="text-uppercase text-muted small mb-0">Open Alerts</h6>
+                    <span id="bedAlertsCount" class="badge bg-danger-subtle text-danger">0</span>
+                  </div>
+                  <ul id="bedAlertsList" class="list-group list-group-flush small"></ul>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="bed-subpanel">
+                  <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h6 class="text-uppercase text-muted small mb-0">On-Duty Staff</h6>
+                    <span id="bedDutyCount" class="badge bg-primary-subtle text-primary">0</span>
+                  </div>
+                  <ul id="bedDutyList" class="list-group list-group-flush small"></ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <div class="row g-4 dashboard-metrics-row">
       <div class="col-xl-4 col-md-6" id="healthMetrics">

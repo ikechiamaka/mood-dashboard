@@ -35,42 +35,79 @@
         <h5 class="admin-section-title"><i class="fas fa-hospital me-2"></i>Facility Management</h5>
         <span class="admin-section-badge">Admins only</span>
       </div>
-      <div class="row">
-        <div class="col-xl-4 mb-4">
-          <div class="card-custom admin-card">
-            <div class="card-title">Beds</div>
+      <ul class="nav nav-pills gap-2 mb-3" id="adminFacilityTabs" role="tablist">
+        <li class="nav-item" role="presentation">
+          <button class="btn btn-sm btn-outline-primary active" data-bs-toggle="pill" data-bs-target="#tabBeds" type="button" role="tab">Beds</button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="btn btn-sm btn-outline-primary" data-bs-toggle="pill" data-bs-target="#tabStaff" type="button" role="tab">Staff Contacts</button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="btn btn-sm btn-outline-primary" data-bs-toggle="pill" data-bs-target="#tabShifts" type="button" role="tab">Shifts</button>
+        </li>
+        <li class="nav-item" role="presentation">
+          <button class="btn btn-sm btn-outline-primary" data-bs-toggle="pill" data-bs-target="#tabDevices" type="button" role="tab">Devices</button>
+        </li>
+      </ul>
+      <div class="tab-content">
+        <div class="tab-pane fade show active" id="tabBeds" role="tabpanel">
+          <div class="card-custom admin-card mb-4">
+            <div class="d-flex align-items-center justify-content-between gap-2 mb-3 flex-wrap">
+              <div class="card-title mb-0">Beds</div>
+              <button id="clearBedsBtn" type="button" class="btn btn-sm btn-outline-danger">
+                <i class="fas fa-broom me-2"></i>Clear All
+              </button>
+            </div>
             <form class="row g-2 mb-3">
-              <div class="col-5"><input id="bedName" class="form-control form-control-sm" placeholder="Bed name" /></div>
-              <div class="col-3"><input id="bedRoom" class="form-control form-control-sm" placeholder="Room" /></div>
-              <div class="col-4"><input id="bedPatient" class="form-control form-control-sm" placeholder="Patient (opt)" /></div>
-              <div class="col-12 text-end"><button id="addBedBtn" type="button" class="btn btn-sm btn-primary">Add Bed</button></div>
+              <div class="col-md-4"><input id="bedName" class="form-control form-control-sm" placeholder="Bed label" /></div>
+              <div class="col-md-3"><input id="bedRoom" class="form-control form-control-sm" placeholder="Room" /></div>
+              <div class="col-md-3"><input id="bedPatient" class="form-control form-control-sm" placeholder="Patient (opt)" /></div>
+              <div class="col-md-2 text-end"><button id="addBedBtn" type="button" class="btn btn-sm btn-primary w-100">Add Bed</button></div>
             </form>
             <ul id="bedsList" class="list-group list-group-flush small"></ul>
           </div>
         </div>
-        <div class="col-xl-4 mb-4">
-          <div class="card-custom admin-card">
+        <div class="tab-pane fade" id="tabStaff" role="tabpanel">
+          <div class="card-custom admin-card mb-4">
             <div class="card-title">Staff Contacts</div>
             <form class="row g-2 mb-3">
-              <div class="col-6"><input id="staffName" class="form-control form-control-sm" placeholder="Name" /></div>
-              <div class="col-6"><input id="staffPhone" class="form-control form-control-sm" placeholder="+1..." /></div>
-              <div class="col-12 text-end"><button id="addStaffBtn" type="button" class="btn btn-sm btn-primary">Add Staff</button></div>
+              <div class="col-md-4"><input id="staffName" class="form-control form-control-sm" placeholder="Name" /></div>
+              <div class="col-md-4"><input id="staffPhone" class="form-control form-control-sm" placeholder="+234..." /></div>
+              <div class="col-md-2"><input id="staffRole" class="form-control form-control-sm" placeholder="Role (nurse)" /></div>
+              <div class="col-md-2 text-end"><button id="addStaffBtn" type="button" class="btn btn-sm btn-primary w-100">Add Staff</button></div>
             </form>
             <ul id="staffList" class="list-group list-group-flush small"></ul>
           </div>
         </div>
-        <div class="col-xl-4 mb-4">
-          <div class="card-custom admin-card">
+        <div class="tab-pane fade" id="tabShifts" role="tabpanel">
+          <div class="card-custom admin-card mb-4">
             <div class="card-title">Shifts</div>
             <form class="row g-2 mb-3">
-              <div class="col-6"><input id="shiftName" class="form-control form-control-sm" placeholder="Shift name" /></div>
-              <div class="col-3"><input id="shiftStart" class="form-control form-control-sm" placeholder="Start HH:MM" /></div>
-              <div class="col-3"><input id="shiftEnd" class="form-control form-control-sm" placeholder="End HH:MM" /></div>
-              <div class="col-8"><input id="shiftDays" class="form-control form-control-sm" placeholder="Days e.g. 0,1,2" /></div>
-              <div class="col-4"><input id="shiftStaffIds" class="form-control form-control-sm" placeholder="Staff IDs" /></div>
-              <div class="col-12 text-end"><button id="addShiftBtn" type="button" class="btn btn-sm btn-primary">Add Shift</button></div>
+              <div class="col-md-3"><input id="shiftName" class="form-control form-control-sm" placeholder="Shift name" /></div>
+              <div class="col-md-2"><input id="shiftStart" class="form-control form-control-sm" placeholder="Start HH:MM" /></div>
+              <div class="col-md-2"><input id="shiftEnd" class="form-control form-control-sm" placeholder="End HH:MM" /></div>
+              <div class="col-md-2"><input id="shiftDays" class="form-control form-control-sm" placeholder="Days 0,1,2" /></div>
+              <div class="col-md-2"><input id="shiftStaffIds" class="form-control form-control-sm" placeholder="Staff ID" /></div>
+              <div class="col-md-1 text-end"><button id="addShiftBtn" type="button" class="btn btn-sm btn-primary w-100">Add</button></div>
             </form>
             <ul id="shiftsList" class="list-group list-group-flush small"></ul>
+          </div>
+        </div>
+        <div class="tab-pane fade" id="tabDevices" role="tabpanel">
+          <div class="card-custom admin-card mb-4">
+            <div class="d-flex align-items-center justify-content-between gap-2 mb-3 flex-wrap">
+              <div class="card-title mb-0">Devices</div>
+              <button id="clearDevicesBtn" type="button" class="btn btn-sm btn-outline-danger">
+                <i class="fas fa-broom me-2"></i>Clear All
+              </button>
+            </div>
+            <form class="row g-2 mb-3">
+              <div class="col-md-3"><input id="deviceId" class="form-control form-control-sm" placeholder="DEV-001" /></div>
+              <div class="col-md-3"><input id="deviceBedId" class="form-control form-control-sm" placeholder="Bed ID" /></div>
+              <div class="col-md-3"><input id="deviceFirmware" class="form-control form-control-sm" placeholder="Firmware" /></div>
+              <div class="col-md-3 text-end"><button id="addDeviceBtn" type="button" class="btn btn-sm btn-primary w-100">Add Device</button></div>
+            </form>
+            <ul id="devicesList" class="list-group list-group-flush small"></ul>
           </div>
         </div>
       </div>

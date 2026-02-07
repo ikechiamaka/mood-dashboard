@@ -4,13 +4,9 @@ import pandas as pd
 import os
 import pytest
 
-# Simple app import
-import app as flask_app
-import db as db_module
-
 @pytest.fixture
-def client():
-    flask_app.app.config['TESTING'] = True
+def client(app_db):
+    flask_app, _db_module = app_db
     with flask_app.app.test_client() as c:
         # Simulate login session
         with c.session_transaction() as sess:
@@ -78,6 +74,8 @@ def test_staff_cannot_list_staff(client):
 
 
 def test_csrf_required_for_api_post(client):
+    import app as flask_app
+    import db as db_module
     prev_testing = flask_app.app.config.get('TESTING')
     flask_app.app.config['TESTING'] = False
     try:

@@ -658,6 +658,272 @@ body::after {
     align-items: center;
 }
 
+.bed-roster-card,
+.bed-detail-card {
+    background: var(--card-tint);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 0.9rem;
+}
+
+.bed-roster-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: linear-gradient(180deg, var(--card-tint), rgba(255, 255, 255, 0.0));
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.dark-theme .bed-roster-header {
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.85), rgba(15, 23, 42, 0.0));
+}
+
+.bed-search .input-group-text {
+    border-radius: 12px 0 0 12px;
+}
+
+.bed-search input.form-control {
+    border-radius: 0;
+}
+
+.bed-search button {
+    border-radius: 0 12px 12px 0;
+}
+
+.bed-roster-scroll {
+    max-height: 560px;
+    overflow: auto;
+    padding-right: 0.25rem;
+    scrollbar-width: thin;
+}
+
+.bed-roster-scroll::-webkit-scrollbar {
+    width: 10px;
+}
+
+.bed-roster-scroll::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.35);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+}
+
+.dark-theme .bed-roster-scroll::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.25);
+    border: 3px solid transparent;
+    background-clip: content-box;
+}
+
+.bed-sort {
+    width: 170px;
+}
+
+.bed-roster-item {
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 0.7rem;
+    margin-bottom: 0.55rem;
+    cursor: pointer;
+    transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+    background: rgba(255, 255, 255, 0.35);
+}
+
+.dark-theme .bed-roster-item {
+    background: rgba(15, 23, 42, 0.5);
+}
+
+.bed-roster-item:hover,
+.bed-roster-item.active {
+    border-color: rgba(37, 99, 235, 0.55);
+    box-shadow: 0 16px 30px -26px rgba(37, 99, 235, 0.65);
+    transform: translateY(-1px);
+}
+
+.bed-roster-item .title {
+    font-weight: 600;
+}
+
+.bed-roster-item .meta {
+    font-size: 0.82rem;
+    color: var(--muted-color);
+}
+
+.bed-roster-item .status-row {
+    display: flex;
+    gap: 0.45rem;
+    margin-top: 0.35rem;
+    flex-wrap: wrap;
+}
+
+.bed-roster-item-inner {
+    display: flex;
+    gap: 0.85rem;
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.bed-roster-left {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.bed-roster-right {
+    flex: 0 0 auto;
+    text-align: right;
+    min-width: 92px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.4rem;
+}
+
+.bed-mini-metrics {
+    display: inline-flex;
+    gap: 0.45rem;
+    align-items: stretch;
+}
+
+.bed-mini-metrics .metric {
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(255, 255, 255, 0.55);
+    border-radius: 12px;
+    padding: 0.35rem 0.45rem;
+    min-width: 44px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    align-items: flex-end;
+}
+
+.dark-theme .bed-mini-metrics .metric {
+    background: rgba(8, 15, 29, 0.85);
+    border-color: rgba(51, 65, 85, 0.75);
+}
+
+.bed-mini-metrics .metric span {
+    font-size: 0.65rem;
+    color: var(--muted-color);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.bed-mini-metrics .metric strong {
+    font-size: 0.9rem;
+}
+
+.bed-last-seen {
+    font-size: 0.78rem;
+    color: var(--muted-color);
+}
+
+.bed-chart-shell {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(255, 255, 255, 0.45);
+    border-radius: 16px;
+    padding: 0.75rem 0.85rem;
+    box-shadow: 0 14px 30px -28px rgba(15, 23, 42, 0.35);
+}
+
+.dark-theme .bed-chart-shell {
+    background: rgba(8, 15, 29, 0.72);
+    border-color: rgba(51, 65, 85, 0.65);
+    box-shadow: 0 18px 36px -30px rgba(2, 6, 23, 0.85);
+}
+
+.bed-chart-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.35rem;
+    font-weight: 600;
+}
+
+.bed-subpanel {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(255, 255, 255, 0.35);
+    border-radius: 16px;
+    padding: 0.75rem 0.85rem;
+}
+
+.dark-theme .bed-subpanel {
+    background: rgba(8, 15, 29, 0.6);
+    border-color: rgba(51, 65, 85, 0.65);
+}
+
+.bed-alert-item,
+.bed-duty-item {
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 14px;
+    margin-bottom: 0.55rem;
+}
+
+.bed-empty-item {
+    background: transparent;
+    border: 1px dashed rgba(148, 163, 184, 0.25);
+    border-radius: 14px;
+}
+
+.bed-ack-btn {
+    border-radius: 12px;
+    width: 38px;
+    height: 38px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.bed-duty-phone {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.85rem;
+}
+
+@media (max-width: 992px) {
+    .bed-roster-scroll {
+        max-height: 420px;
+    }
+    .bed-sort {
+        width: 100%;
+    }
+    .bed-roster-item-inner {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .bed-roster-right {
+        align-items: flex-start;
+        text-align: left;
+        flex-direction: row;
+        justify-content: space-between;
+    }
+    .bed-mini-metrics .metric {
+        align-items: flex-start;
+    }
+}
+
+.bed-kpi {
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 0.55rem 0.65rem;
+    background: var(--card-bg);
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.bed-kpi span {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    color: var(--muted-color);
+    letter-spacing: 0.04em;
+}
+
+.bed-kpi strong {
+    font-size: 0.95rem;
+}
+
 .theme-toggle-input {
     position: absolute;
     opacity: 0;
@@ -2695,6 +2961,11 @@ body.command-palette-open {
     border: 1px solid rgba(255, 255, 255, 0.2);
     background: rgba(15, 23, 42, 0.65);
     color: #f8fafc;
+}
+
+.dark-theme .text-muted,
+.dark-theme .text-secondary {
+    color: var(--muted-color) !important;
 }
 
 /* Admin page refinements */

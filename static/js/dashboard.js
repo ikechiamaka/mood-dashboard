@@ -17,6 +17,12 @@ let csrfToken = null;
 let drawerFocusCleanup = null;
 let commandPaletteFocusCleanup = null;
 let drawerReturnFocus = null;
+let selectedBedId = null;
+let bedRosterCache = [];
+let bedRosterQuery = '';
+let bedRosterFilter = 'all';
+let bedRosterSort = 'last_seen';
+const bedCharts = { rr:null, hr:null, presence:null };
 
 function trapFocus(container){
   if(!container){
@@ -207,8 +213,12 @@ async function initUser(){
 }
 // Theme handling
 function initTheme(){ const themeSwitch=document.getElementById('themeSwitch'); const themeSelect=document.getElementById('themeSelect'); if(localStorage.theme==='dark'){ document.body.classList.add('dark-theme'); if(themeSwitch) themeSwitch.checked=true; if(themeSelect) themeSelect.value='dark'; }
-  if(themeSwitch){ themeSwitch.onchange=e=>{ const dark=e.target.checked; document.body.classList.toggle('dark-theme', dark); if(themeSelect) themeSelect.value=dark?'dark':'light'; localStorage.theme=dark?'dark':'light'; }; }
-  if(themeSelect){ themeSelect.onchange=e=>{ const dark=e.target.value==='dark'; document.body.classList.toggle('dark-theme', dark); if(themeSwitch) themeSwitch.checked=dark; localStorage.theme=e.target.value; }; }
+  const refresh = () => {
+    try{ typeof refreshBedChartsTheme === 'function' && refreshBedChartsTheme(); }catch(_){ }
+    try{ typeof refreshTrendChartsTheme === 'function' && refreshTrendChartsTheme(); }catch(_){ }
+  };
+  if(themeSwitch){ themeSwitch.onchange=e=>{ const dark=e.target.checked; document.body.classList.toggle('dark-theme', dark); if(themeSelect) themeSelect.value=dark?'dark':'light'; localStorage.theme=dark?'dark':'light'; refresh(); }; }
+  if(themeSelect){ themeSelect.onchange=e=>{ const dark=e.target.value==='dark'; document.body.classList.toggle('dark-theme', dark); if(themeSwitch) themeSwitch.checked=dark; localStorage.theme=e.target.value; refresh(); }; }
 }
 // Avatar upload feedback
 function initAvatarUpload(){
@@ -264,6 +274,86 @@ async function uploadProfileAvatar(file){
 // Keep global chart references for dynamic updates
 const charts = { healthDonut:null, mood:null, movement:null };
 let selectedPatientId = null;
+
+function getChartThemeTokens(){
+  const style = getComputedStyle(document.body);
+  return {
+    primary: style.getPropertyValue('--primary').trim() || '#2563eb',
+    success: style.getPropertyValue('--success').trim() || '#22c55e',
+    gridColor: style.getPropertyValue('--chart-grid').trim() || 'rgba(15,23,42,0.08)',
+    tickColor: style.getPropertyValue('--muted-color').trim() || '#64748b',
+    textColor: style.getPropertyValue('--text-color').trim() || '#0f172a',
+  };
+}
+
+function buildThemedLineOptions({ gridColor, tickColor, textColor }){
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 220 },
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgba(2, 6, 23, 0.86)',
+        titleColor: '#fff',
+        bodyColor: '#e2e8f0',
+        borderColor: 'rgba(148,163,184,0.25)',
+        borderWidth: 1,
+        padding: 10,
+        displayColors: false,
+      },
+    },
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { color: tickColor, maxRotation: 0, autoSkip: true, maxTicksLimit: 7 },
+      },
+      y: {
+        grid: { color: gridColor },
+        ticks: { color: tickColor },
+      },
+    },
+    elements: {
+      line: { borderCapStyle: 'round', borderJoinStyle: 'round' },
+      point: { radius: 0, hitRadius: 16, hoverRadius: 5 },
+    },
+  };
+}
+
+function makeVerticalGradient(ctx, top, bottom){
+  const gradient = ctx.createLinearGradient(0, 0, 0, 180);
+  gradient.addColorStop(0, top);
+  gradient.addColorStop(1, bottom);
+  return gradient;
+}
+
+function refreshTrendChartsTheme(){
+  if(typeof Chart === 'undefined') return;
+  const tokens = getChartThemeTokens();
+  const apply = (chart, borderColor, gradientTop) => {
+    if(!chart || !chart.options) return;
+    try{
+      if(chart.options.scales?.y?.grid) chart.options.scales.y.grid.color = tokens.gridColor;
+      if(chart.options.scales?.y?.ticks) chart.options.scales.y.ticks.color = tokens.tickColor;
+      if(chart.options.scales?.x?.ticks) chart.options.scales.x.ticks.color = tokens.tickColor;
+      if(chart.options.plugins?.legend?.labels) chart.options.plugins.legend.labels.color = tokens.textColor;
+      if(chart.data?.datasets?.[0]){
+        chart.data.datasets[0].borderColor = borderColor;
+        if(chart.ctx){
+          const gradientBottom = gradientTop.replace('0.22)', '0.00)');
+          chart.data.datasets[0].backgroundColor = makeVerticalGradient(chart.ctx, gradientTop, gradientBottom);
+        }
+      }
+      chart.update();
+    }catch(_){}
+  };
+
+  // Mood uses primary, Activity uses success.
+  apply(charts.mood, tokens.primary, 'rgba(37, 99, 235, 0.22)');
+  apply(charts.movement, tokens.success, 'rgba(34, 197, 94, 0.22)');
+}
+
 function initCharts(){
   if(typeof Chart==='undefined') return;
   const donutEl = document.getElementById('healthDonut');
@@ -276,18 +366,74 @@ function initCharts(){
   }
   const moodCtx=document.getElementById('moodChart');
   if(moodCtx){
+    const tokens = getChartThemeTokens();
+    const ctx = moodCtx.getContext('2d');
+    const baseLineOptions = buildThemedLineOptions(tokens);
+    const moodLabels = ['','Sad','Low','Neutral','Fair','Good','Happy'];
+    const moodGradient = makeVerticalGradient(ctx, 'rgba(37, 99, 235, 0.22)', 'rgba(37, 99, 235, 0.00)');
     charts.mood = new Chart(moodCtx.getContext('2d'), {
       type:'line',
-      data:{ labels:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'], datasets:[{ label:'Mood Level', data:[3.2,4.1,3.8,4.5,4.8,5.2,4.9], borderColor:'#4e73df', backgroundColor:'rgba(78,115,223,0.05)', tension:0.4, fill:true, pointBackgroundColor:'#fff', pointBorderColor:'#4e73df', pointBorderWidth:2, pointRadius:4 }]},
-      options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ min:1, max:6, ticks:{ callback:value=>['','Sad','Low','Neutral','Fair','Good','Happy'][value] } } }, plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:ctx=>`Mood: ${['','Sad','Low','Neutral','Fair','Good','Happy'][ctx.parsed.y]}` } } } }
+      data:{ labels:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'], datasets:[{ label:'Mood Level', data:[3.2,4.1,3.8,4.5,4.8,5.2,4.9], borderColor: tokens.primary, backgroundColor: moodGradient, fill:true, tension:0.35, pointRadius:0, borderWidth:2 }]},
+      options:{
+        ...baseLineOptions,
+        scales:{
+          ...baseLineOptions.scales,
+          y:{
+            ...baseLineOptions.scales.y,
+            min: 1,
+            max: 6,
+            ticks:{
+              ...baseLineOptions.scales.y.ticks,
+              stepSize: 1,
+              callback: value => moodLabels[Math.round(value)] || '',
+            }
+          }
+        },
+        plugins:{
+          ...baseLineOptions.plugins,
+          tooltip:{
+            ...baseLineOptions.plugins.tooltip,
+            callbacks:{
+              label: (ctx) => {
+                const v = typeof ctx.parsed?.y === 'number' ? ctx.parsed.y : null;
+                const label = v === null ? '--' : (moodLabels[Math.round(v)] || String(v));
+                return `Mood: ${label}`;
+              }
+            }
+          }
+        }
+      }
     });
   }
   const moveCtx=document.getElementById('moveChart');
   if(moveCtx){
-    charts.movement = new Chart(moveCtx.getContext('2d'), {
-      type:'bar',
-      data:{ labels:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'], datasets:[{ label:'Movement', data:[7.2,8.5,6.8,9.2,8.4,10.1,7.9], backgroundColor:'#1cc88a', borderRadius:5 }]},
-      options:{ responsive:true, maintainAspectRatio:false, scales:{ y:{ beginAtZero:true, title:{ display:true, text:'Movement'} } }, plugins:{ legend:{display:false} } }
+    const tokens = getChartThemeTokens();
+    const ctx = moveCtx.getContext('2d');
+    const baseLineOptions = buildThemedLineOptions(tokens);
+    const activityGradient = makeVerticalGradient(ctx, 'rgba(34, 197, 94, 0.22)', 'rgba(34, 197, 94, 0.00)');
+    charts.movement = new Chart(ctx, {
+      type:'line',
+      data:{ labels:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'], datasets:[{ label:'Activity', data:[7.2,8.5,6.8,9.2,8.4,10.1,7.9], borderColor: tokens.success, backgroundColor: activityGradient, fill:true, tension:0.35, pointRadius:0, borderWidth:2 }]},
+      options:{
+        ...baseLineOptions,
+        scales:{
+          ...baseLineOptions.scales,
+          y:{
+            ...baseLineOptions.scales.y,
+            suggestedMin: 0,
+            suggestedMax: 12,
+          },
+        },
+        plugins:{
+          ...baseLineOptions.plugins,
+          tooltip:{
+            ...baseLineOptions.plugins.tooltip,
+            callbacks:{
+              label: (ctx) => `Activity: ${ctx.parsed?.y ?? '--'}`
+            }
+          }
+        }
+      }
     });
   }
 }
@@ -319,7 +465,19 @@ async function apiPost(path, payload, params){
   const url = params? withQuery(path, params) : path;
   const r = await fetch(url, { method:'POST', headers: withCsrf({ 'Content-Type':'application/json' }), credentials:'same-origin', body: JSON.stringify(payload) });
   if(r.status === 401) { window.location.href = '/login'; return null; }
-  if(!r.ok) throw new Error(`POST ${path} failed: ${r.status}`);
+  if(!r.ok){
+    let detail = '';
+    try{
+      const data = await r.json();
+      if(data && typeof data === 'object'){
+        detail = data.error ? String(data.error) : JSON.stringify(data);
+      }
+    }catch(_){
+      detail = '';
+    }
+    const msg = detail ? `${r.status} (${detail})` : String(r.status);
+    throw new Error(`POST ${path} failed: ${msg}`);
+  }
   return r.json();
 }
 
@@ -357,6 +515,43 @@ function formatDateTime(value){
   const date = value instanceof Date ? value : new Date(value);
   if(Number.isNaN(date.getTime())) return '--';
   return date.toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+
+function formatEpochSeconds(value){
+  if(value === null || value === undefined || value === '') return '--';
+  const parsed = Number(value);
+  if(Number.isNaN(parsed)) return '--';
+  return formatDateTime(new Date(parsed * 1000));
+}
+
+function formatRelativeEpochSeconds(value){
+  if(value === null || value === undefined || value === '') return '--';
+  const parsed = Number(value);
+  if(Number.isNaN(parsed)) return '--';
+  const diffMs = Date.now() - (parsed * 1000);
+  const seconds = Math.floor(diffMs / 1000);
+  if(seconds < 0) return 'just now';
+  if(seconds < 30) return 'just now';
+  if(seconds < 90) return '1m ago';
+  const minutes = Math.floor(seconds / 60);
+  if(minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if(hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function normalizeForSearch(value){
+  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function isStaleLastSeen(epochSeconds){
+  if(epochSeconds === null || epochSeconds === undefined) return true;
+  const parsed = Number(epochSeconds);
+  if(Number.isNaN(parsed)) return true;
+  const diffSec = Math.floor((Date.now() - parsed * 1000) / 1000);
+  const threshold = 120;
+  return diffSec > threshold;
 }
 
 function formatRelativeTime(value){
@@ -675,10 +870,48 @@ function renderBeds(items){
     li.className = 'list-group-item d-flex justify-content-between align-items-center';
     const text = document.createElement('span');
     text.className = 'admin-list-text';
-    text.textContent = [b.name, b.room ? `Room ${b.room}` : null, b.patient ? `Patient: ${b.patient}` : null].filter(Boolean).join(' | ');
+    const strong = document.createElement('strong');
+    strong.textContent = b?.label || b?.name || '';
+    text.appendChild(strong);
+    if(b?.id){
+      text.appendChild(document.createTextNode(' | '));
+      const code = document.createElement('code');
+      code.textContent = String(b.id);
+      text.appendChild(code);
+    }
+    const extra = [b.room ? `Room ${b.room}` : null, b.patient ? `Patient: ${b.patient}` : null].filter(Boolean).join(' | ');
+    if(extra){
+      text.appendChild(document.createTextNode(` | ${extra}`));
+    }
     const actions = document.createElement('div');
     actions.className = 'admin-list-actions';
     if(b?.id){
+      const copy = document.createElement('button');
+      copy.className = 'btn btn-sm btn-outline-secondary';
+      copy.innerHTML = '<i class="fas fa-copy"></i>';
+      copy.title = 'Copy bed id';
+      copy.addEventListener('click', async () => {
+        try{
+          const value = String(b.id);
+          if(navigator.clipboard && navigator.clipboard.writeText){
+            await navigator.clipboard.writeText(value);
+          }else{
+            const ta = document.createElement('textarea');
+            ta.value = value;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          showToast({ title:'Copied', message:'Bed ID copied to clipboard.' });
+        }catch(e){
+          console.error('[dashboard] copy bed id failed', e);
+        }
+      });
+      actions.appendChild(copy);
       const del = document.createElement('button');
       del.className = 'btn btn-sm btn-outline-danger';
       del.innerHTML = '<i class="fas fa-trash"></i>';
@@ -709,7 +942,10 @@ async function addBed(){
     patient: patientInput?.value?.trim() || ''
   };
   try{
-    await apiPost('/api/beds', payload);
+    const created = await apiPost('/api/beds', payload);
+    if(created?.id){
+      showToast({ title:'Bed created', message:`Bed ID: ${created.id}` });
+    }
     if(nameInput) nameInput.value = '';
     if(roomInput) roomInput.value = '';
     if(patientInput) patientInput.value = '';
@@ -720,10 +956,12 @@ async function addBed(){
 async function addStaff(){
   const name = document.getElementById('staffName')?.value.trim();
   const phone = document.getElementById('staffPhone')?.value.trim();
+  const role = document.getElementById('staffRole')?.value.trim();
   if(!name || !phone) return;
-  await apiPost('/api/staff', { name, phone });
+  await apiPost('/api/staff', { name, phone, role });
   if(document.getElementById('staffName')) document.getElementById('staffName').value='';
   if(document.getElementById('staffPhone')) document.getElementById('staffPhone').value='';
+  if(document.getElementById('staffRole')) document.getElementById('staffRole').value='';
   loadStaff();
 }
 
@@ -788,6 +1026,145 @@ async function addShift(){
   loadShifts();
 }
 
+async function loadDevices(){
+  try{
+    const list = await apiGet('/api/admin/devices');
+    renderDevices(list);
+  }catch(e){
+    console.error('[dashboard] loadDevices failed', e);
+  }
+}
+
+function renderDevices(items){
+  const ul = document.getElementById('devicesList');
+  if(!ul) return;
+  ul.innerHTML = '';
+  (items || []).forEach(device => {
+    const li = document.createElement('li');
+    li.className = 'list-group-item d-flex justify-content-between align-items-center';
+    const text = document.createElement('span');
+    text.className = 'admin-list-text';
+    const caps = Array.isArray(device?.capabilities) && device.capabilities.length ? device.capabilities.join(', ') : 'n/a';
+    text.textContent = `${device?.id || ''} | bed ${device?.bed_id || '--'} | fw ${device?.firmware || '--'} | caps ${caps}`;
+    const actions = document.createElement('div');
+    actions.className = 'admin-list-actions';
+    if(device?.id){
+      const rotateBtn = document.createElement('button');
+      rotateBtn.className = 'btn btn-sm btn-outline-warning';
+      rotateBtn.title = 'Rotate API key';
+      rotateBtn.innerHTML = '<i class="fas fa-key"></i>';
+      rotateBtn.addEventListener('click', async () => {
+        await rotateDeviceKey(device.id);
+      });
+      actions.appendChild(rotateBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-sm btn-outline-danger';
+      delBtn.title = 'Delete device';
+      delBtn.innerHTML = '<i class="fas fa-trash"></i>';
+      delBtn.addEventListener('click', async () => {
+        await deleteDevice(device.id);
+      });
+      actions.appendChild(delBtn);
+    }
+    li.appendChild(text);
+    li.appendChild(actions);
+    ul.appendChild(li);
+  });
+}
+
+async function rotateDeviceKey(deviceId){
+  if(!deviceId){
+    return;
+  }
+  const confirmed = confirm(`Rotate API key for ${deviceId}?`);
+  if(!confirmed){
+    return;
+  }
+  try{
+    const resp = await apiPost(`/api/admin/devices/${encodeURIComponent(deviceId)}/rotate_key`, {});
+    if(resp?.api_key){
+      showToast({ title:'API key rotated', message:`${deviceId}: ${resp.api_key}` });
+    }else{
+      showToast({ title:'API key rotated', message:`${deviceId} key updated.` });
+    }
+    loadDevices();
+  }catch(e){
+    console.error('[dashboard] rotateDeviceKey failed', e);
+    showToast({ title:'Rotate failed', message:'Unable to rotate key right now.', variant:'error' });
+  }
+}
+
+async function deleteDevice(deviceId){
+  if(!deviceId){
+    return;
+  }
+  const confirmed = confirm(`Delete device ${deviceId}? This will deactivate it (telemetry ingestion will stop).`);
+  if(!confirmed){
+    return;
+  }
+  try{
+    await apiDelete(`/api/admin/devices/${encodeURIComponent(deviceId)}`);
+    showToast({ title:'Device deleted', message:`${deviceId} removed.` });
+    loadDevices();
+  }catch(e){
+    console.error('[dashboard] deleteDevice failed', e);
+    showToast({ title:'Delete failed', message:'Unable to delete device right now.', variant:'error' });
+  }
+}
+
+async function clearAllBeds(){
+  const confirmed = confirm('Clear ALL beds for this facility? This will deactivate them (not permanently remove telemetry).');
+  if(!confirmed){
+    return;
+  }
+  try{
+    const resp = await apiPost('/api/admin/beds/clear', { confirm:true });
+    showToast({ title:'Beds cleared', message:`Cleared ${resp?.beds_cleared ?? 0} beds.` });
+    loadBeds();
+    loadBedRoster();
+  }catch(e){
+    console.error('[dashboard] clearAllBeds failed', e);
+    showToast({ title:'Clear failed', message:'Unable to clear beds right now.', variant:'error' });
+  }
+}
+
+async function clearAllDevices(){
+  const confirmed = confirm('Clear ALL devices for this facility? This will deactivate them and stop ingestion.');
+  if(!confirmed){
+    return;
+  }
+  try{
+    const resp = await apiPost('/api/admin/devices/clear', { confirm:true });
+    showToast({ title:'Devices cleared', message:`Cleared ${resp?.devices_cleared ?? 0} devices.` });
+    loadDevices();
+  }catch(e){
+    console.error('[dashboard] clearAllDevices failed', e);
+    showToast({ title:'Clear failed', message:'Unable to clear devices right now.', variant:'error' });
+  }
+}
+
+async function addDevice(){
+  const device_id = document.getElementById('deviceId')?.value.trim();
+  const bed_id = document.getElementById('deviceBedId')?.value.trim();
+  const firmware = document.getElementById('deviceFirmware')?.value.trim();
+  if(!device_id){
+    showToast({ title:'Device ID required', message:'Enter a device identifier.', variant:'error' });
+    return;
+  }
+  try{
+    const resp = await apiPost('/api/admin/devices', { device_id, bed_id, firmware, capabilities:['presence','fall'] });
+    if(resp?.api_key){
+      showToast({ title:'Device created', message:`API key: ${resp.api_key}` });
+    }
+    ['deviceId','deviceBedId','deviceFirmware'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    loadDevices();
+  }catch(e){
+    console.error('[dashboard] addDevice failed', e);
+    showToast({ title:'Create failed', message: (e && e.message) ? e.message : 'Unable to create device right now.', variant:'error' });
+  }
+}
+
 function initFacilityUi(){
   if(!currentUser || (currentUser.id !== 'super_admin' && currentUser.id !== 'facility_admin')){
     return;
@@ -807,7 +1184,22 @@ function initFacilityUi(){
     addShiftBtn.dataset.bound = '1';
     addShiftBtn.addEventListener('click', addShift);
   }
-  loadBeds(); loadStaff(); loadShifts();
+  const addDeviceBtn = document.getElementById('addDeviceBtn');
+  if(addDeviceBtn && !addDeviceBtn.dataset.bound){
+    addDeviceBtn.dataset.bound = '1';
+    addDeviceBtn.addEventListener('click', addDevice);
+  }
+  const clearBedsBtn = document.getElementById('clearBedsBtn');
+  if(clearBedsBtn && !clearBedsBtn.dataset.bound){
+    clearBedsBtn.dataset.bound = '1';
+    clearBedsBtn.addEventListener('click', clearAllBeds);
+  }
+  const clearDevicesBtn = document.getElementById('clearDevicesBtn');
+  if(clearDevicesBtn && !clearDevicesBtn.dataset.bound){
+    clearDevicesBtn.dataset.bound = '1';
+    clearDevicesBtn.addEventListener('click', clearAllDevices);
+  }
+  loadBeds(); loadStaff(); loadShifts(); loadDevices();
 }
 
 function initSidebarNav(){
@@ -879,11 +1271,48 @@ function renderBeds(items){
     const li = document.createElement('li'); li.className='list-group-item d-flex justify-content-between align-items-center';
     const text = document.createElement('span');
     text.className = 'admin-list-text';
-    const meta = [b.name, b.room?`Room ${b.room}`:null, b.patient?`Patient: ${b.patient}`:null].filter(Boolean).join(' | ');
-    text.textContent = `${meta}`;
+    const strong = document.createElement('strong');
+    strong.textContent = b?.label || b?.name || '';
+    text.appendChild(strong);
+    if(b?.id){
+      text.appendChild(document.createTextNode(' | '));
+      const code = document.createElement('code');
+      code.textContent = String(b.id);
+      text.appendChild(code);
+    }
+    const extra = [b.room?`Room ${b.room}`:null, b.patient?`Patient: ${b.patient}`:null].filter(Boolean).join(' | ');
+    if(extra){
+      text.appendChild(document.createTextNode(` | ${extra}`));
+    }
     const actions = document.createElement('div');
     actions.className = 'admin-list-actions';
     if(b?.id){
+      const copy = document.createElement('button');
+      copy.className = 'btn btn-sm btn-outline-secondary';
+      copy.innerHTML = '<i class="fas fa-copy"></i>';
+      copy.title = 'Copy bed id';
+      copy.addEventListener('click', async () => {
+        try{
+          const value = String(b.id);
+          if(navigator.clipboard && navigator.clipboard.writeText){
+            await navigator.clipboard.writeText(value);
+          }else{
+            const ta = document.createElement('textarea');
+            ta.value = value;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          showToast({ title:'Copied', message:'Bed ID copied to clipboard.' });
+        }catch(e){
+          console.error('[dashboard] copy bed id failed', e);
+        }
+      });
+      actions.appendChild(copy);
       const del = document.createElement('button');
       del.className = 'btn btn-sm btn-outline-danger';
       del.innerHTML = '<i class="fas fa-trash"></i>';
@@ -3157,6 +3586,439 @@ function initSidebarNav(){
   });
 }
 
+function initBedCharts(){
+  const rrEl = document.getElementById('bedRrChart');
+  const hrEl = document.getElementById('bedHrChart');
+  const prEl = document.getElementById('bedPresenceChart');
+  const style = getComputedStyle(document.body);
+  const colorPrimary = style.getPropertyValue('--primary').trim() || '#2563eb';
+  const colorDanger = style.getPropertyValue('--danger').trim() || '#ef4444';
+  const colorSuccess = style.getPropertyValue('--success').trim() || '#22c55e';
+  const gridColor = style.getPropertyValue('--chart-grid').trim() || 'rgba(15,23,42,0.08)';
+  const tickColor = style.getPropertyValue('--muted-color').trim() || '#64748b';
+  const textColor = style.getPropertyValue('--text-color').trim() || '#0f172a';
+
+  const baseLineOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 220 },
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgba(2, 6, 23, 0.86)',
+        titleColor: '#fff',
+        bodyColor: '#e2e8f0',
+        borderColor: 'rgba(148,163,184,0.25)',
+        borderWidth: 1,
+        padding: 10,
+        displayColors: false,
+      },
+    },
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { color: tickColor, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 },
+      },
+      y: {
+        grid: { color: gridColor },
+        ticks: { color: tickColor },
+      },
+    },
+  };
+
+  if(rrEl && !bedCharts.rr){
+    const ctx = rrEl.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, 180);
+    gradient.addColorStop(0, 'rgba(239, 68, 68, 0.22)');
+    gradient.addColorStop(1, 'rgba(239, 68, 68, 0.00)');
+    bedCharts.rr = new Chart(ctx, {
+      type:'line',
+      data:{ labels:[], datasets:[{ label:'RR', data:[], borderColor: colorDanger, backgroundColor: gradient, fill:true, tension:0.35, pointRadius:0, borderWidth:2 }]},
+      options: {
+        ...baseLineOptions,
+        scales: {
+          ...baseLineOptions.scales,
+          y: { ...baseLineOptions.scales.y, suggestedMin: 0, suggestedMax: 20 },
+        }
+      }
+    });
+  }
+  if(hrEl && !bedCharts.hr){
+    const ctx = hrEl.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, 180);
+    gradient.addColorStop(0, 'rgba(37, 99, 235, 0.22)');
+    gradient.addColorStop(1, 'rgba(37, 99, 235, 0.00)');
+    bedCharts.hr = new Chart(ctx, {
+      type:'line',
+      data:{ labels:[], datasets:[{ label:'HR', data:[], borderColor: colorPrimary, backgroundColor: gradient, fill:true, tension:0.35, pointRadius:0, borderWidth:2 }]},
+      options: {
+        ...baseLineOptions,
+        scales: {
+          ...baseLineOptions.scales,
+          y: { ...baseLineOptions.scales.y, suggestedMin: 40, suggestedMax: 110 },
+        }
+      }
+    });
+  }
+  if(prEl && !bedCharts.presence){
+    const ctx = prEl.getContext('2d');
+    bedCharts.presence = new Chart(ctx, {
+      type:'line',
+      data:{
+        labels:[],
+        datasets:[
+          {
+            label:'Presence',
+            data:[],
+            borderColor: colorSuccess,
+            backgroundColor: 'rgba(34, 197, 94, 0.15)',
+            fill:true,
+            stepped:true,
+            pointRadius:0,
+            borderWidth:2,
+          },
+          {
+            label:'Fall',
+            data:[],
+            borderColor: colorDanger,
+            backgroundColor: colorDanger,
+            showLine:false,
+            pointRadius:4,
+            pointHoverRadius:5,
+          }
+        ]
+      },
+      options:{
+        ...baseLineOptions,
+        plugins: {
+          ...baseLineOptions.plugins,
+          legend: {
+            display: true,
+            labels: { color: textColor, usePointStyle: true, pointStyle: 'circle' },
+          },
+        },
+        scales: {
+          ...baseLineOptions.scales,
+          y: { ...baseLineOptions.scales.y, beginAtZero:true, max: 1, ticks: { color: tickColor, stepSize: 1 } },
+        }
+      }
+    });
+  }
+}
+
+function refreshBedChartsTheme(){
+  const style = getComputedStyle(document.body);
+  const gridColor = style.getPropertyValue('--chart-grid').trim() || 'rgba(15,23,42,0.08)';
+  const tickColor = style.getPropertyValue('--muted-color').trim() || '#64748b';
+  const textColor = style.getPropertyValue('--text-color').trim() || '#0f172a';
+  const apply = (chart) => {
+    if(!chart || !chart.options) return;
+    try{
+      if(chart.options.scales?.y?.grid) chart.options.scales.y.grid.color = gridColor;
+      if(chart.options.scales?.y?.ticks) chart.options.scales.y.ticks.color = tickColor;
+      if(chart.options.scales?.x?.ticks) chart.options.scales.x.ticks.color = tickColor;
+      if(chart.options.plugins?.legend?.labels) chart.options.plugins.legend.labels.color = textColor;
+      chart.update();
+    }catch(_){}
+  };
+  apply(bedCharts.rr);
+  apply(bedCharts.hr);
+  apply(bedCharts.presence);
+}
+
+function updateBedChart(chart, points){
+  if(!chart) return;
+  const rows = Array.isArray(points) ? points : [];
+  const maxPoints = 220;
+  const step = rows.length > maxPoints ? Math.ceil(rows.length / maxPoints) : 1;
+  const thinned = step > 1 ? rows.filter((_, idx) => idx % step === 0) : rows;
+  chart.data.labels = thinned.map(p => formatEpochSeconds(p.ts));
+  if(chart.data.datasets[0]){
+    chart.data.datasets[0].data = thinned.map(p => p.value ?? null);
+  }
+  chart.update();
+}
+
+function updateBedPresenceChart(pointsPresence, pointsFall){
+  if(!bedCharts.presence) return;
+  const presenceRows = Array.isArray(pointsPresence) ? pointsPresence : [];
+  const fallRows = Array.isArray(pointsFall) ? pointsFall : [];
+  const maxPoints = 240;
+  const step = presenceRows.length > maxPoints ? Math.ceil(presenceRows.length / maxPoints) : 1;
+  const pThin = step > 1 ? presenceRows.filter((_, idx) => idx % step === 0) : presenceRows;
+  bedCharts.presence.data.labels = pThin.map(p => formatEpochSeconds(p.ts));
+  bedCharts.presence.data.datasets[0].data = pThin.map(p => (p.value ? 1 : 0));
+  const fallMap = new Map(fallRows.map(r => [String(r.ts), r.value ? 1 : 0]));
+  bedCharts.presence.data.datasets[1].data = pThin.map(p => (fallMap.get(String(p.ts)) === 1 ? 1 : null));
+  bedCharts.presence.update();
+}
+
+function renderBedAlerts(alerts){
+  const list = document.getElementById('bedAlertsList');
+  const count = document.getElementById('bedAlertsCount');
+  if(!list) return;
+  list.innerHTML = '';
+  const rows = Array.isArray(alerts) ? alerts : [];
+  if(count){
+    count.textContent = String(rows.length);
+    count.className = `badge ${rows.length ? 'bg-danger-subtle text-danger' : 'bg-secondary-subtle text-secondary'}`;
+  }
+  if(!rows.length){
+    const li = document.createElement('li');
+    li.className = 'list-group-item text-muted bed-empty-item';
+    li.textContent = 'No open alerts';
+    list.appendChild(li);
+    return;
+  }
+  rows.forEach(alert => {
+    const li = document.createElement('li');
+    li.className = 'list-group-item bed-alert-item d-flex justify-content-between align-items-start gap-2';
+    const left = document.createElement('div');
+    const when = alert.ts ? formatRelativeEpochSeconds(alert.ts) : '';
+    const sev = (alert.severity || '').toString().toLowerCase();
+    const sevClass = sev === 'critical' ? 'bg-danger-subtle text-danger' : (sev === 'warn' ? 'bg-warning-subtle text-warning' : 'bg-secondary-subtle text-secondary');
+    left.innerHTML = `
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="badge ${sevClass}">${escapeHtml(sev || 'info')}</span>
+        <strong>${escapeHtml(alert.type || 'Alert')}</strong>
+        <span class="text-muted small">${escapeHtml(when)}</span>
+      </div>
+      <div class="small text-muted mt-1">${escapeHtml(alert.message || '')}</div>
+    `;
+    const right = document.createElement('button');
+    right.className = 'btn btn-sm btn-outline-primary bed-ack-btn';
+    right.innerHTML = '<i class="fas fa-check"></i>';
+    right.title = 'Acknowledge alert';
+    right.addEventListener('click', async () => {
+      try{
+        await apiPost(`/api/alerts/${encodeURIComponent(alert.id)}/ack`, {});
+        if(selectedBedId){
+          loadBedBundle(selectedBedId);
+        }
+      }catch(err){
+        console.error('[dashboard] ack alert failed', err);
+      }
+    });
+    li.appendChild(left);
+    li.appendChild(right);
+    list.appendChild(li);
+  });
+}
+
+function renderBedDuty(staff){
+  const list = document.getElementById('bedDutyList');
+  const count = document.getElementById('bedDutyCount');
+  if(!list) return;
+  list.innerHTML = '';
+  const rows = Array.isArray(staff) ? staff : [];
+  if(count){
+    count.textContent = String(rows.length);
+    count.className = `badge ${rows.length ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary'}`;
+  }
+  if(!rows.length){
+    const li = document.createElement('li');
+    li.className = 'list-group-item text-muted bed-empty-item';
+    li.textContent = 'No staff on duty';
+    list.appendChild(li);
+    return;
+  }
+  rows.forEach(item => {
+    const li = document.createElement('li');
+    li.className = 'list-group-item bed-duty-item';
+    li.innerHTML = `
+      <div class="d-flex align-items-center justify-content-between gap-2">
+        <div class="d-flex flex-column">
+          <strong>${escapeHtml(item?.name || 'Staff')}</strong>
+          <span class="text-muted small">${escapeHtml(item?.role || 'on-duty')}</span>
+        </div>
+        <div class="text-end">
+          <div class="bed-duty-phone">${escapeHtml(item?.phone_e164 || '--')}</div>
+        </div>
+      </div>
+    `;
+    list.appendChild(li);
+  });
+}
+
+async function loadBedBundle(bedId){
+  if(!bedId) return;
+  try{
+    const bundle = await apiGet('/api/bed_bundle', { bed_id: bedId });
+    if(!bundle) return;
+    const bed = bundle.bed || {};
+    setText('bedDetailTitle', bed.label || bed.name || bed.id || 'Bed');
+    setText('bedDetailMeta', [bed.room ? `Room ${bed.room}` : null, bed.patient ? `Patient: ${bed.patient}` : null].filter(Boolean).join(' | ') || 'No room/patient mapping');
+    setText('bedDetailLastSeen', `Last seen: ${formatEpochSeconds(bed.last_seen_at)}`);
+    const latest = bundle.latest_telemetry || {};
+    setText('bedKpiPresence', latest.presence === null || latest.presence === undefined ? '--' : (latest.presence ? 'Occupied' : 'Empty'));
+    setText('bedKpiFall', latest.fall === null || latest.fall === undefined ? '--' : (latest.fall ? 'Fall detected' : 'Clear'));
+    setText('bedKpiRr', latest.rr === null || latest.rr === undefined ? '--' : `${Number(latest.rr).toFixed(1)} /min`);
+    setText('bedKpiHr', latest.hr === null || latest.hr === undefined ? '--' : `${Number(latest.hr).toFixed(1)} bpm`);
+    updateBedChart(bedCharts.rr, bundle?.trend?.rr || []);
+    updateBedChart(bedCharts.hr, bundle?.trend?.hr || []);
+    updateBedPresenceChart(bundle?.trend?.presence || [], bundle?.trend?.fall || []);
+    renderBedAlerts(bundle.open_alerts || []);
+    renderBedDuty(bundle.on_duty_staff || []);
+  }catch(err){
+    console.error('[dashboard] loadBedBundle failed', err);
+  }
+}
+
+function renderBedRoster(items){
+  const list = document.getElementById('bedsRosterList');
+  const empty = document.getElementById('bedsRosterEmpty');
+  const noMatch = document.getElementById('bedsRosterNoMatch');
+  const count = document.getElementById('bedsRosterCount');
+  const meta = document.getElementById('bedsRosterMeta');
+  if(!list || !empty || !count) return;
+  list.innerHTML = '';
+  const rows = Array.isArray(items) ? items : [];
+  const total = Array.isArray(bedRosterCache) ? bedRosterCache.length : rows.length;
+  count.textContent = String(rows.length);
+  if(meta){
+    meta.textContent = `Showing ${rows.length} of ${total}`;
+  }
+  const hasAny = total > 0;
+  empty.classList.toggle('d-none', hasAny);
+  if(noMatch){
+    noMatch.classList.toggle('d-none', rows.length > 0 || !hasAny);
+  }
+  rows.forEach(bed => {
+    const li = document.createElement('li');
+    li.className = `bed-roster-item ${String(bed.id) === String(selectedBedId) ? 'active' : ''}`;
+    li.setAttribute('role', 'button');
+    const occupied = bed.occupied === null || bed.occupied === undefined ? 'Unknown' : (bed.occupied ? 'Occupied' : 'Empty');
+    const lastSeenRel = bed.last_seen_at ? formatRelativeEpochSeconds(bed.last_seen_at) : '--';
+    const stale = isStaleLastSeen(bed.last_seen_at);
+    const rrText = bed.rr === null || bed.rr === undefined ? '--' : `${Number(bed.rr).toFixed(1)}`;
+    const hrText = bed.hr === null || bed.hr === undefined ? '--' : `${Number(bed.hr).toFixed(0)}`;
+    li.innerHTML = `
+      <div class="bed-roster-item-inner">
+        <div class="bed-roster-left">
+          <div class="title">${escapeHtml(bed.label || bed.name || bed.id || 'Bed')}</div>
+          <div class="meta">${escapeHtml(bed.room ? `Room ${bed.room}` : 'No room')} ${bed.patient ? `| ${escapeHtml(bed.patient)}` : ''}</div>
+          <div class="status-row">
+            <span class="badge ${bed.occupied ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary'}">${occupied}</span>
+            <span class="badge ${bed.fall ? 'bg-danger-subtle text-danger' : 'bg-light text-muted'}">${bed.fall ? 'Fall' : 'No Fall'}</span>
+            <span class="badge ${stale ? 'bg-warning-subtle text-warning' : 'bg-primary-subtle text-primary'}">${stale ? 'Stale' : 'Live'}</span>
+          </div>
+        </div>
+        <div class="bed-roster-right">
+          <div class="bed-mini-metrics">
+            <div class="metric"><span>RR</span><strong>${escapeHtml(rrText)}</strong></div>
+            <div class="metric"><span>HR</span><strong>${escapeHtml(hrText)}</strong></div>
+          </div>
+          <div class="bed-last-seen">${escapeHtml(lastSeenRel)}</div>
+        </div>
+      </div>
+    `;
+    li.addEventListener('click', () => {
+      selectedBedId = bed.id;
+      renderBedRoster(rows);
+      loadBedBundle(selectedBedId);
+    });
+    list.appendChild(li);
+  });
+}
+
+function applyBedRosterFilters(){
+  const rows = Array.isArray(bedRosterCache) ? bedRosterCache.slice() : [];
+  const q = normalizeForSearch(bedRosterQuery);
+  let filtered = rows;
+  if(q){
+    filtered = filtered.filter(bed => {
+      const hay = normalizeForSearch([bed.id, bed.label, bed.name, bed.room, bed.patient].filter(Boolean).join(' '));
+      return hay.includes(q);
+    });
+  }
+  if(bedRosterFilter === 'occupied'){
+    filtered = filtered.filter(b => b.occupied === true);
+  }else if(bedRosterFilter === 'fall'){
+    filtered = filtered.filter(b => !!b.fall);
+  }else if(bedRosterFilter === 'stale'){
+    filtered = filtered.filter(b => isStaleLastSeen(b.last_seen_at));
+  }
+  if(bedRosterSort === 'label'){
+    filtered.sort((a,b) => String(a.label || a.name || a.id).localeCompare(String(b.label || b.name || b.id)));
+  }else if(bedRosterSort === 'room'){
+    filtered.sort((a,b) => String(a.room || '').localeCompare(String(b.room || '')) || String(a.label || a.name || a.id).localeCompare(String(b.label || b.name || b.id)));
+  }else{
+    filtered.sort((a,b) => (Number(b.last_seen_at || 0) - Number(a.last_seen_at || 0)) || String(a.label || a.name || a.id).localeCompare(String(b.label || b.name || b.id)));
+  }
+  renderBedRoster(filtered);
+  if(selectedBedId){
+    const stillVisible = filtered.some(b => String(b.id) === String(selectedBedId));
+    if(!stillVisible && filtered.length){
+      selectedBedId = filtered[0].id;
+      loadBedBundle(selectedBedId);
+      renderBedRoster(filtered);
+    }
+  }else if(filtered.length){
+    selectedBedId = filtered[0].id;
+    loadBedBundle(selectedBedId);
+    renderBedRoster(filtered);
+  }
+}
+
+async function loadBedRoster(){
+  if(!document.getElementById('bedsRosterList')) return;
+  try{
+    const beds = await apiGet('/api/beds');
+    bedRosterCache = Array.isArray(beds) ? beds : [];
+    applyBedRosterFilters();
+  }catch(err){
+    console.error('[dashboard] loadBedRoster failed', err);
+  }
+}
+
+function initBedMonitoring(){
+  if(!document.getElementById('bedsMonitoring')) return;
+  initBedCharts();
+  const search = document.getElementById('bedsSearchInput');
+  const clear = document.getElementById('bedsClearSearch');
+  const sort = document.getElementById('bedsSortSelect');
+  if(search && !search.dataset.bound){
+    search.dataset.bound = '1';
+    search.addEventListener('input', () => {
+      bedRosterQuery = search.value || '';
+      applyBedRosterFilters();
+    });
+  }
+  if(clear && !clear.dataset.bound){
+    clear.dataset.bound = '1';
+    clear.addEventListener('click', () => {
+      if(search){
+        search.value = '';
+      }
+      bedRosterQuery = '';
+      applyBedRosterFilters();
+    });
+  }
+  if(sort && !sort.dataset.bound){
+    sort.dataset.bound = '1';
+    sort.addEventListener('change', () => {
+      bedRosterSort = sort.value || 'last_seen';
+      applyBedRosterFilters();
+    });
+  }
+  const filterButtons = document.querySelectorAll('.bed-filter-btn[data-filter]');
+  filterButtons.forEach(btn => {
+    if(btn.dataset.bound){
+      return;
+    }
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      const value = btn.getAttribute('data-filter') || 'all';
+      bedRosterFilter = value;
+      filterButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      applyBedRosterFilters();
+    });
+  });
+  loadBedRoster();
+}
+
 
 
 
@@ -3183,12 +4045,14 @@ document.addEventListener('DOMContentLoaded', () => {
   initPatientDrawer();
   initUser().then(() => {
     initPatientSelector();
+    initBedMonitoring();
     initFacilityUi();
     initAdminUi();
     updatePatientEmptyStates();
   }).catch(err => {
     console.error('[dashboard] initUser promise rejected', err);
     initPatientSelector();
+    initBedMonitoring();
     initFacilityUi();
     updatePatientEmptyStates();
   });
@@ -3201,6 +4065,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     loadPatientBundle();
   }, 60000);
+  setInterval(() => {
+    if(document.hidden){
+      return;
+    }
+    loadBedRoster();
+    if(selectedBedId){
+      loadBedBundle(selectedBedId);
+    }
+  }, 30000);
 });
 
 

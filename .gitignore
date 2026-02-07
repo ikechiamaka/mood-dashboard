@@ -47,6 +47,9 @@ data/checkins.csv
 *.png
 *.svg
 
+# Arduino secrets
+arduino/**/secrets.h
+
 # Mac / OS noise
 .DS_Store
 Thumbs.db

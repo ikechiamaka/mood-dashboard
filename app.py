@@ -5,17 +5,22 @@ import os
 import re
 import time
 import joblib
+import json
 from datetime import datetime, timedelta, timezone
 import logging
+from zoneinfo import ZoneInfo
+from urllib import request as urllib_request
 from dotenv import load_dotenv
 try:
     import openai
 except ImportError:
     openai = None
 from uuid import uuid4
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 from collections import deque
+import sqlite3
 
 from preprocessing import engineer_features, ensure_feature_order, FEATURE_COLUMNS
 from users import (
@@ -54,11 +59,47 @@ from db import (
     db_insert_prediction,
     db_insert_support_request,
     db_insert_audit_event,
+    db_get_user_id,
+    db_get_facility,
+    db_get_staff_contact,
+    db_list_bed_assignments_for_user,
+    db_list_beds_scoped,
+    db_create_bed,
+    db_soft_delete_bed,
+    db_soft_delete_all_beds,
+    db_list_staff_contacts,
+    db_create_staff_contact,
+    db_delete_staff_contact,
+    db_list_shifts_v2,
+    db_create_shift_v2,
+    db_delete_shift_v2,
+    db_get_device,
+    db_rotate_device_api_key,
+    db_soft_delete_device,
+    db_soft_delete_all_devices,
+    db_list_devices,
+    db_upsert_device,
+    db_update_device_heartbeat,
+    db_insert_telemetry,
+    db_get_latest_telemetry_for_bed,
+    db_get_latest_telemetry_for_beds,
+    db_list_telemetry_for_bed,
+    db_list_recent_telemetry_since,
+    db_get_latest_telemetry_id,
+    db_list_alerts,
+    db_get_alert,
+    db_get_open_alert_for_bed_type,
+    db_insert_alert,
+    db_ack_alert,
+    db_resolve_alert,
+    db_update_alert_meta,
+    db_get_patient_by_bed_id,
+    db_assign_bed_to_user,
     get_conn,
 )
 from functools import lru_cache
 from datetime import datetime as dt
-from typing import Any, Dict
+from typing import Any, Dict, Optional, List
 
 
 
@@ -121,6 +162,122 @@ def _audit_event(action: str, target: str | None = None, details: str | None = N
         )
     except Exception:
         return
+
+
+def _is_admin_role(role: Optional[str]) -> bool:
+    return role in ('super_admin', 'facility_admin')
+
+
+def _session_user_id() -> Optional[int]:
+    email = session.get('user')
+    if not email:
+        return None
+    return db_get_user_id(email)
+
+
+def _current_user_facility_id() -> Optional[int]:
+    role = session.get('role')
+    if role == 'facility_admin' or role == 'staff':
+        value = session.get('facility_id')
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    return None
+
+
+def _admin_facility_scope_from_request() -> Optional[int]:
+    role = session.get('role')
+    if role == 'super_admin':
+        raw = request.args.get('facility_id')
+        if raw and str(raw).isdigit():
+            return int(raw)
+        return None
+    return _current_user_facility_id()
+
+
+def _staff_assigned_patient_beds() -> set[str]:
+    assigned_ids = [int(x) for x in (session.get('assigned_patient_ids') or []) if str(x).isdigit()]
+    if not assigned_ids:
+        return set()
+    beds = set()
+    for patient in db_list_patients(None, assigned_ids):
+        bed_id = patient.get('bed_id')
+        if bed_id:
+            beds.add(str(bed_id))
+    return beds
+
+
+def _staff_explicit_bed_assignments() -> set[str]:
+    uid = _session_user_id()
+    if not uid:
+        return set()
+    return set(db_list_bed_assignments_for_user(uid))
+
+
+def _allowed_bed_ids_for_user() -> Optional[set[str]]:
+    role = session.get('role')
+    if role in ('super_admin', 'facility_admin'):
+        return None
+    if role != 'staff':
+        return set()
+    combined = _staff_assigned_patient_beds().union(_staff_explicit_bed_assignments())
+    return combined
+
+
+def _bed_access_ok(bed_id: str) -> bool:
+    role = session.get('role')
+    if role == 'super_admin':
+        return True
+    if role not in ('facility_admin', 'staff'):
+        return False
+    facility_id = _current_user_facility_id()
+    allowed = _allowed_bed_ids_for_user()
+    beds = db_list_beds_scoped(
+        facility_id,
+        allowed_bed_ids=list(allowed) if allowed is not None else None,
+        include_inactive=True,
+    )
+    return any(str(b.get('id')) == str(bed_id) for b in beds)
+
+
+def _normalize_bool_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        return 1 if int(value) != 0 else 0
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in ('1', 'true', 'yes', 'y', 'on'):
+            return 1
+        if raw in ('0', 'false', 'no', 'n', 'off'):
+            return 0
+    return None
+
+
+def _coerce_epoch_seconds(value: Any) -> Optional[int]:
+    if value is None or value == '':
+        return None
+    try:
+        if isinstance(value, str):
+            parsed = value.strip()
+            if parsed.endswith('Z'):
+                parsed = parsed[:-1] + '+00:00'
+            if 'T' in parsed or '+' in parsed:
+                return int(dt.fromisoformat(parsed).timestamp())
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _extract_bearer_token() -> Optional[str]:
+    authz = (request.headers.get('Authorization') or '').strip()
+    if not authz.lower().startswith('bearer '):
+        return None
+    token = authz[7:].strip()
+    return token or None
 
 
 @app.before_request
@@ -1462,173 +1619,135 @@ def patient_bundle():
     _audit_event('view_patient_bundle', str(pid))
     return jsonify(payload)
 
+
+@app.route('/api/v1/telemetry', methods=['POST'])
+def ingest_telemetry():
+    token = _extract_bearer_token()
+    if not token:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if _rate_limited(f'telemetry-ip:{request.remote_addr}', 240, 60):
+        return jsonify({'error': 'rate limit exceeded'}), 429
+
+    payload = request.get_json(silent=True)
+    if payload is None:
+        # Werkzeug may already have read and cached the body during get_json().
+        raw = request.get_data(cache=True) or b''
+        if raw:
+            decoded: Optional[str] = None
+            for encoding in ('utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be'):
+                try:
+                    decoded = raw.decode(encoding, errors='strict')
+                    break
+                except Exception:
+                    decoded = None
+            if decoded is None:
+                return jsonify({'error': 'invalid JSON payload'}), 400
+            try:
+                payload = json.loads(decoded)
+                # Some Windows tooling ends up sending JSON as a JSON string literal.
+                # If that happens, unpack one more layer.
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+            except Exception:
+                return jsonify({'error': 'invalid JSON payload'}), 400
+        else:
+            payload = {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return jsonify({'error': 'invalid JSON payload'}), 400
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'invalid JSON payload'}), 400
+    device_id = _clean_text(payload.get('device_id'), 80)
+    if not device_id:
+        return jsonify({'error': 'device_id required'}), 400
+    if _rate_limited(f'telemetry-device:{device_id}', 600, 60):
+        return jsonify({'error': 'rate limit exceeded'}), 429
+
+    device = db_get_device(device_id)
+    if not device:
+        return jsonify({'error': 'Unknown device'}), 401
+    if int(device.get('active') or 0) != 1:
+        return jsonify({'error': 'Unknown device'}), 401
+    api_key_hash = device.get('api_key_hash') or ''
+    if not api_key_hash or not check_password_hash(api_key_hash, token):
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    facility_id = device.get('facility_id')
+    payload_facility = payload.get('facility_id')
+    if payload_facility is not None and str(payload_facility).isdigit():
+        if int(payload_facility) != int(facility_id):
+            return jsonify({'error': 'facility mismatch'}), 403
+
+    device_bed_id = device.get('bed_id')
+    payload_bed_id = _clean_text(payload.get('bed_id'), 120)
+    if device_bed_id and payload_bed_id and str(device_bed_id) != str(payload_bed_id):
+        return jsonify({'error': 'bed mismatch'}), 403
+    bed_id = str(device_bed_id or payload_bed_id or '').strip()
+    if not bed_id:
+        return jsonify({'error': 'device bed assignment missing'}), 400
+
+    beds = db_list_beds_scoped(int(facility_id), include_inactive=True)
+    known_bed_ids = {str(item.get('id')) for item in beds}
+    if bed_id not in known_bed_ids:
+        return jsonify({'error': 'unknown bed for facility'}), 400
+
+    ts = _coerce_epoch_seconds(payload.get('ts'))
+    if ts is None:
+        ts = int(dt.now(timezone.utc).timestamp())
+    presence = _normalize_bool_int(payload.get('presence'))
+    fall = _normalize_bool_int(payload.get('fall'))
+    rr = _coerce_float(payload.get('rr'), low=0.0, high=120.0)
+    hr = _coerce_float(payload.get('hr'), low=0.0, high=260.0)
+    confidence = _coerce_float(payload.get('confidence'), low=0.0, high=1.0)
+    if os.getenv('SIMULATE_VITALS', '0') == '1':
+        rr = rr if rr is not None else _coerce_float(payload.get('rr_sim'), low=0.0, high=120.0)
+        hr = hr if hr is not None else _coerce_float(payload.get('hr_sim'), low=0.0, high=260.0)
+
+    raw_payload = payload.get('raw')
+    telemetry_id = db_insert_telemetry(
+        device_id=device_id,
+        facility_id=int(facility_id),
+        bed_id=bed_id,
+        ts=ts,
+        presence=presence,
+        fall=fall,
+        rr=rr,
+        hr=hr,
+        confidence=confidence,
+        raw=raw_payload if isinstance(raw_payload, (dict, list, str)) else None,
+    )
+
+    capabilities = payload.get('capabilities')
+    if not isinstance(capabilities, list):
+        capabilities = device.get('capabilities') or []
+    firmware = _clean_text(payload.get('firmware'), 120)
+    if not device_bed_id and payload_bed_id:
+        db_upsert_device(
+            device_id=device_id,
+            facility_id=int(facility_id),
+            bed_id=bed_id,
+            api_key_hash=api_key_hash,
+            firmware=firmware,
+            capabilities=capabilities,
+            last_seen_at=ts,
+        )
+    else:
+        db_update_device_heartbeat(
+            device_id=device_id,
+            last_seen_at=ts,
+            firmware=firmware,
+            capabilities=capabilities,
+        )
+
+    return jsonify({'ok': True, 'telemetry_id': telemetry_id})
+
 """
 Facility management + alerting (RR<5) additions
 """
 
 # --- Staff, beds, schedule APIs (DB-backed) ---
-@app.route('/api/staff', methods=['GET', 'POST'])
-def staff_api():
-    if 'user' not in session:
-        return jsonify({'error': 'Unauthorized'}), 401
-    role = session.get('role')
-    # GET filtered by facility
-    if request.method == 'GET':
-        if role not in ('super_admin', 'facility_admin'):
-            return jsonify({'error': 'Forbidden'}), 403
-        if role == 'super_admin':
-            facility_id = request.args.get('facility_id')
-            fid = int(facility_id) if facility_id and facility_id.isdigit() else None
-        else:
-            fid = session.get('facility_id')
-        return jsonify(db_list_staff(fid))
-    # POST requires admin privileges
-    if role not in ('super_admin', 'facility_admin'):
-        return jsonify({'error': 'Forbidden'}), 403
-    data = request.get_json(force=True) or {}
-    name = _clean_text(data.get('name'), 80)
-    phone = _clean_text(data.get('phone'), 32)
-    if not name or not phone:
-        return jsonify({'error': 'name and phone required'}), 400
-    from uuid import uuid4
-    fid = session.get('facility_id')
-    if session.get('role') == 'super_admin':
-        maybe = data.get('facility_id')
-        if isinstance(maybe, int) or (isinstance(maybe, str) and maybe.isdigit()):
-            fid = int(maybe)
-    item = db_insert_staff(str(uuid4()), name, phone, fid)
-    _audit_event('create_staff', item.get('id'))
-    return jsonify(item), 201
-
-
-@app.route('/api/staff/<staff_id>', methods=['DELETE'])
-def staff_delete(staff_id: str):
-    if 'user' not in session:
-        return jsonify({'error': 'Unauthorized'}), 401
-    if session.get('role') not in ('super_admin', 'facility_admin'):
-        return jsonify({'error': 'Forbidden'}), 403
-    ok = db_delete_staff(staff_id)
-    if not ok:
-        return jsonify({'error': 'Not found'}), 404
-    _audit_event('delete_staff', staff_id)
-    return jsonify({'status': 'deleted'})
-
-
-@app.route('/api/beds', methods=['GET', 'POST'])
-def beds_api():
-    if 'user' not in session:
-        return jsonify({'error': 'Unauthorized'}), 401
-    role = session.get('role')
-    if request.method == 'GET':
-        if role not in ('super_admin', 'facility_admin'):
-            return jsonify({'error': 'Forbidden'}), 403
-        if role == 'super_admin':
-            facility_id = request.args.get('facility_id')
-            fid = int(facility_id) if facility_id and facility_id.isdigit() else None
-        else:
-            fid = session.get('facility_id')
-        return jsonify(db_list_beds(fid))
-    if role not in ('super_admin', 'facility_admin'):
-        return jsonify({'error': 'Forbidden'}), 403
-    data = request.get_json(force=True) or {}
-    name = _clean_text(data.get('name'), 80)
-    room = _clean_text(data.get('room'), 40) or ''
-    patient = _clean_text(data.get('patient'), 80) or ''
-    if not name:
-        return jsonify({'error': 'name required'}), 400
-    from uuid import uuid4
-    fid = session.get('facility_id')
-    if session.get('role') == 'super_admin':
-        maybe = data.get('facility_id')
-        if isinstance(maybe, int) or (isinstance(maybe, str) and maybe.isdigit()):
-            fid = int(maybe)
-    item = db_insert_bed(str(uuid4()), name, room, patient, fid)
-    _audit_event('create_bed', item.get('id'))
-    return jsonify(item), 201
-
-
-@app.route('/api/beds/<bed_id>', methods=['DELETE'])
-def bed_delete(bed_id: str):
-    if 'user' not in session:
-        return jsonify({'error': 'Unauthorized'}), 401
-    if session.get('role') not in ('super_admin', 'facility_admin'):
-        return jsonify({'error': 'Forbidden'}), 403
-    target = db_get_bed(bed_id)
-    if not target:
-        return jsonify({'error': 'Not found'}), 404
-    if session.get('role') == 'facility_admin':
-        if target.get('facility_id') != session.get('facility_id'):
-            return jsonify({'error': 'Forbidden'}), 403
-    ok = db_delete_bed(bed_id)
-    if ok:
-        _audit_event('delete_bed', bed_id)
-    return jsonify({'status': 'deleted' if ok else 'not_found'})
-
-
-@app.route('/api/schedule', methods=['GET', 'POST'])
-def schedule_api():
-    if 'user' not in session:
-        return jsonify({'error': 'Unauthorized'}), 401
-    role = session.get('role')
-    if request.method == 'GET':
-        if role not in ('super_admin', 'facility_admin'):
-            return jsonify({'error': 'Forbidden'}), 403
-        if role == 'super_admin':
-            facility_id = request.args.get('facility_id')
-            fid = int(facility_id) if facility_id and facility_id.isdigit() else None
-        else:
-            fid = session.get('facility_id')
-        return jsonify(db_list_schedule(fid))
-    if role not in ('super_admin', 'facility_admin'):
-        return jsonify({'error': 'Forbidden'}), 403
-    data = request.get_json(force=True) or {}
-    name = _clean_text(data.get('name'), 80)
-    start = (data.get('start') or '').strip()  # HH:MM 24h
-    end = (data.get('end') or '').strip()
-    days = data.get('days') or []              # [0-6] Mon=0
-    staff_ids = data.get('staff_ids') or []
-    if not name or not start or not end or not isinstance(days, list):
-        return jsonify({'error': 'name, start, end, days required'}), 400
-    if _hhmm_to_minutes(start) < 0 or _hhmm_to_minutes(end) < 0:
-        return jsonify({'error': 'invalid time format'}), 400
-    day_values = []
-    for d in days:
-        day = _coerce_int(d, low=0, high=6)
-        if day is None:
-            return jsonify({'error': 'invalid days value'}), 400
-        day_values.append(day)
-    days = day_values
-    if not isinstance(staff_ids, list):
-        return jsonify({'error': 'invalid staff_ids'}), 400
-    from uuid import uuid4
-    fid = session.get('facility_id')
-    if session.get('role') == 'super_admin':
-        maybe = data.get('facility_id')
-        if isinstance(maybe, int) or (isinstance(maybe, str) and maybe.isdigit()):
-            fid = int(maybe)
-    item = db_insert_schedule(str(uuid4()), name, start, end, days, staff_ids, fid)
-    _audit_event('create_schedule', item.get('id'))
-    return jsonify(item), 201
-
-
-@app.route('/api/schedule/<schedule_id>', methods=['DELETE'])
-def schedule_delete(schedule_id: str):
-    if 'user' not in session:
-        return jsonify({'error': 'Unauthorized'}), 401
-    if session.get('role') not in ('super_admin', 'facility_admin'):
-        return jsonify({'error': 'Forbidden'}), 403
-    target = db_get_schedule(schedule_id)
-    if not target:
-        return jsonify({'error': 'Not found'}), 404
-    if session.get('role') == 'facility_admin':
-        if target.get('facility_id') != session.get('facility_id'):
-            return jsonify({'error': 'Forbidden'}), 403
-    ok = db_delete_schedule(schedule_id)
-    if ok:
-        _audit_event('delete_schedule', schedule_id)
-    return jsonify({'status': 'deleted' if ok else 'not_found'})
-
-
 def _hhmm_to_minutes(s: str) -> int:
     try:
         h, m = s.split(':')
@@ -1637,37 +1756,586 @@ def _hhmm_to_minutes(s: str) -> int:
         return -1
 
 
-def _on_duty_phone_numbers() -> list[str]:
-    from datetime import datetime as _dt, timezone as _tz
-    now = _dt.now(_tz.utc)
-    day = now.weekday()  # 0=Mon
-    minutes = now.hour * 60 + now.minute
-    sch = db_list_schedule(None)
-    staff = db_list_staff(None)
-    id_to_phone = {s.get('id'): s.get('phone') for s in staff}
-    recipients: set[str] = set()
-    for sh in sch:
-        if day not in (sh.get('days') or []):
+def _normalize_days(values: Any) -> List[int]:
+    if not isinstance(values, list):
+        return []
+    out: List[int] = []
+    for value in values:
+        day = _coerce_int(value, low=0, high=6)
+        if day is not None:
+            out.append(day)
+    return sorted(set(out))
+
+
+def _facility_timezone_name(facility_id: Optional[int]) -> str:
+    if facility_id is None:
+        return 'UTC'
+    try:
+        fac = db_get_facility(int(facility_id))
+    except Exception:
+        fac = None
+    return (fac or {}).get('timezone') or 'UTC'
+
+
+def _contacts_on_duty(facility_id: int, now_utc: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    now_utc = now_utc or datetime.now(timezone.utc)
+    facility_tz = _facility_timezone_name(facility_id)
+    shifts = db_list_shifts_v2(facility_id, active_only=True)
+    recipients: List[Dict[str, Any]] = []
+    for shift in shifts:
+        days = _normalize_days(shift.get('days_of_week') or [])
+        if not days:
             continue
-        start = _hhmm_to_minutes(sh.get('start', ''))
-        end = _hhmm_to_minutes(sh.get('end', ''))
+        tz_name = (shift.get('timezone') or facility_tz or 'UTC').strip() or 'UTC'
+        try:
+            zone = ZoneInfo(tz_name)
+        except Exception:
+            zone = timezone.utc
+        local_now = now_utc.astimezone(zone)
+        if local_now.weekday() not in days:
+            continue
+        start = _hhmm_to_minutes(shift.get('start_time', ''))
+        end = _hhmm_to_minutes(shift.get('end_time', ''))
         if start < 0 or end < 0:
             continue
-        if start <= end:
-            in_window = (start <= minutes < end)
-        else:
-            in_window = (minutes >= start or minutes < end)
-        if in_window:
-            for sid in sh.get('staff_ids') or []:
-                phone = id_to_phone.get(sid)
-                if phone:
-                    recipients.add(phone)
+        current = local_now.hour * 60 + local_now.minute
+        in_window = (start <= current < end) if start <= end else (current >= start or current < end)
+        if not in_window:
+            continue
+        phone = (shift.get('staff_phone') or '').strip()
+        if not phone:
+            continue
+        recipients.append(
+            {
+                'id': shift.get('staff_contact_id'),
+                'name': shift.get('staff_name') or 'On-duty staff',
+                'phone_e164': phone,
+                'role': 'staff',
+            }
+        )
+    if recipients:
+        seen = set()
+        unique: List[Dict[str, Any]] = []
+        for item in recipients:
+            phone = item.get('phone_e164')
+            if phone and phone not in seen:
+                seen.add(phone)
+                unique.append(item)
+        recipients = unique
     if not recipients:
-        recipients = set(p for p in id_to_phone.values() if p)
+        recipients = db_list_staff_contacts(facility_id, active_only=True)
     override = os.getenv('ALERT_TO', '').strip()
     if override:
-        return [override]
-    return sorted(recipients)
+        return [{'id': None, 'name': 'Override', 'phone_e164': override, 'role': 'override'}]
+    return recipients
+
+
+def _scoped_beds_for_session(include_inactive: bool = False) -> List[Dict[str, Any]]:
+    role = session.get('role')
+    if role not in ('super_admin', 'facility_admin', 'staff'):
+        return []
+    facility_id = _admin_facility_scope_from_request() if role != 'staff' else _current_user_facility_id()
+    allowed_ids = _allowed_bed_ids_for_user()
+    return db_list_beds_scoped(
+        facility_id,
+        allowed_bed_ids=list(allowed_ids) if allowed_ids is not None else None,
+        include_inactive=include_inactive,
+    )
+
+
+def _serialize_beds_with_live_summary(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    bed_ids = [str(item.get('id')) for item in items if item.get('id')]
+    latest_map = db_get_latest_telemetry_for_beds(bed_ids)
+    out: List[Dict[str, Any]] = []
+    for bed in items:
+        payload = dict(bed)
+        payload['label'] = payload.get('label') or payload.get('name')
+        payload['name'] = payload.get('label') or payload.get('name')
+        latest = latest_map.get(str(bed.get('id')))
+        if latest:
+            payload['last_seen_at'] = latest.get('ts')
+            payload['presence'] = latest.get('presence')
+            payload['fall'] = latest.get('fall')
+            payload['rr'] = latest.get('rr')
+            payload['hr'] = latest.get('hr')
+            payload['confidence'] = latest.get('confidence')
+            payload['occupied'] = bool(latest.get('presence')) if latest.get('presence') is not None else None
+        else:
+            payload['last_seen_at'] = None
+            payload['presence'] = None
+            payload['fall'] = None
+            payload['rr'] = None
+            payload['hr'] = None
+            payload['confidence'] = None
+            payload['occupied'] = None
+        out.append(payload)
+    return out
+
+
+def _resolve_admin_facility_from_payload(data: Dict[str, Any]) -> Optional[int]:
+    if session.get('role') == 'super_admin':
+        candidate = data.get('facility_id')
+        if isinstance(candidate, int):
+            return candidate
+        if isinstance(candidate, str) and candidate.isdigit():
+            return int(candidate)
+        query_candidate = request.args.get('facility_id')
+        if query_candidate and str(query_candidate).isdigit():
+            return int(query_candidate)
+        fallback = session.get('facility_id')
+        if isinstance(fallback, int):
+            return fallback
+        if isinstance(fallback, str) and fallback.isdigit():
+            return int(fallback)
+        return 1
+    return _current_user_facility_id()
+
+
+@app.route('/api/beds', methods=['GET', 'POST'])
+def beds_api():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    role = session.get('role')
+    if request.method == 'GET':
+        beds = _scoped_beds_for_session(include_inactive=False)
+        return jsonify(_serialize_beds_with_live_summary(beds))
+    if not _is_admin_role(role):
+        return jsonify({'error': 'Forbidden'}), 403
+    data = request.get_json(force=True) or {}
+    label = _clean_text(data.get('label') or data.get('name'), 80)
+    room = _clean_text(data.get('room'), 64)
+    patient_text = _clean_text(data.get('patient'), 120)
+    facility_id = _resolve_admin_facility_from_payload(data)
+    if facility_id is None:
+        return jsonify({'error': 'facility_id required'}), 400
+    if not label:
+        return jsonify({'error': 'label required'}), 400
+    bed_id = _clean_text(data.get('id'), 80) or str(uuid4())
+    created = db_create_bed(
+        bed_id=bed_id,
+        facility_id=int(facility_id),
+        label=label,
+        room=room,
+    )
+    if patient_text:
+        conn = get_conn()
+        conn.execute('UPDATE beds SET patient = ? WHERE id = ?', (patient_text, bed_id))
+        conn.commit()
+        created['patient'] = patient_text
+    assign_user_id = _coerce_int(data.get('staff_user_id'))
+    if assign_user_id is not None:
+        db_assign_bed_to_user(assign_user_id, bed_id)
+    _audit_event('create_bed', bed_id, f'facility={facility_id}')
+    return jsonify(created), 201
+
+
+@app.route('/api/beds/<bed_id>', methods=['DELETE'])
+def bed_delete(bed_id: str):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    if not _bed_access_ok(bed_id):
+        return jsonify({'error': 'Forbidden'}), 403
+    ok = db_soft_delete_bed(bed_id)
+    if not ok:
+        return jsonify({'error': 'Not found'}), 404
+    _audit_event('delete_bed', bed_id)
+    return jsonify({'status': 'deleted'})
+
+
+@app.route('/api/admin/beds', methods=['POST'])
+def admin_create_bed():
+    return beds_api()
+
+
+@app.route('/api/admin/beds/<bed_id>', methods=['DELETE'])
+def admin_delete_bed(bed_id: str):
+    return bed_delete(bed_id)
+
+
+@app.route('/api/admin/beds/clear', methods=['POST'])
+def admin_clear_beds():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    data = request.get_json(silent=True) or {}
+    if data.get('confirm') is not True:
+        return jsonify({'error': 'confirm=true required'}), 400
+    fid = _resolve_admin_facility_from_payload(data)
+    if fid is None:
+        return jsonify({'error': 'facility_id required'}), 400
+    deleted = db_soft_delete_all_beds(int(fid))
+    _audit_event('clear_beds', None, f'facility={fid}, count={deleted}')
+    return jsonify({'status': 'ok', 'facility_id': int(fid), 'beds_cleared': deleted})
+
+
+@app.route('/api/staff', methods=['GET', 'POST'])
+def staff_api():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    if request.method == 'GET':
+        fid = _admin_facility_scope_from_request()
+        contacts = db_list_staff_contacts(fid, active_only=True)
+        payload = [
+            {
+                'id': str(item.get('id')),
+                'name': item.get('name'),
+                'phone': item.get('phone_e164'),
+                'phone_e164': item.get('phone_e164'),
+                'role': item.get('role'),
+                'facility_id': item.get('facility_id'),
+                'active': item.get('active'),
+            }
+            for item in contacts
+        ]
+        return jsonify(payload)
+    data = request.get_json(force=True) or {}
+    fid = _resolve_admin_facility_from_payload(data)
+    name = _clean_text(data.get('name'), 80)
+    phone = _clean_text(data.get('phone') or data.get('phone_e164'), 32)
+    role_name = _clean_text(data.get('role'), 40) or 'nurse'
+    if fid is None or not name or not phone:
+        return jsonify({'error': 'facility_id, name and phone required'}), 400
+    created = db_create_staff_contact(int(fid), name, phone, role_name)
+    _audit_event('create_staff_contact', str(created.get('id')))
+    return jsonify(
+        {
+            'id': str(created.get('id')),
+            'name': created.get('name'),
+            'phone': created.get('phone_e164'),
+            'phone_e164': created.get('phone_e164'),
+            'role': created.get('role'),
+            'facility_id': created.get('facility_id'),
+            'active': created.get('active'),
+        }
+    ), 201
+
+
+@app.route('/api/staff/<staff_id>', methods=['DELETE'])
+def staff_delete(staff_id: str):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    sid = _coerce_int(staff_id, low=1)
+    if sid is None:
+        return jsonify({'error': 'invalid id'}), 400
+    ok = db_delete_staff_contact(sid)
+    if not ok:
+        return jsonify({'error': 'Not found'}), 404
+    _audit_event('delete_staff_contact', str(sid))
+    return jsonify({'status': 'deleted'})
+
+
+@app.route('/api/admin/staff_contacts', methods=['GET', 'POST'])
+def admin_staff_contacts_api():
+    return staff_api()
+
+
+@app.route('/api/admin/staff_contacts/<int:staff_id>', methods=['DELETE'])
+def admin_staff_contact_delete(staff_id: int):
+    return staff_delete(str(staff_id))
+
+
+@app.route('/api/schedule', methods=['GET', 'POST'])
+def schedule_api():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    if request.method == 'GET':
+        fid = _admin_facility_scope_from_request()
+        shifts = db_list_shifts_v2(fid, active_only=True)
+        payload = []
+        for item in shifts:
+            payload.append(
+                {
+                    'id': str(item.get('id')),
+                    'name': item.get('staff_name') or 'Shift',
+                    'start': item.get('start_time'),
+                    'end': item.get('end_time'),
+                    'days': _normalize_days(item.get('days_of_week') or []),
+                    'staff_ids': [str(item.get('staff_contact_id'))] if item.get('staff_contact_id') is not None else [],
+                    'facility_id': item.get('facility_id'),
+                    'timezone': item.get('timezone'),
+                }
+            )
+        return jsonify(payload)
+    data = request.get_json(force=True) or {}
+    fid = _resolve_admin_facility_from_payload(data)
+    start = (data.get('start') or data.get('start_time') or '').strip()
+    end = (data.get('end') or data.get('end_time') or '').strip()
+    days = _normalize_days(data.get('days') or data.get('days_of_week') or [])
+    timezone_name = _clean_text(data.get('timezone'), 64) or _facility_timezone_name(fid)
+    name = _clean_text(data.get('name'), 80) or 'Shift'
+    staff_ids = data.get('staff_ids')
+    staff_contact_id = _coerce_int(data.get('staff_contact_id'), low=1)
+    if isinstance(staff_ids, list) and staff_ids:
+        staff_contact_id = _coerce_int(staff_ids[0], low=1)
+    if fid is None or staff_contact_id is None or not start or not end or not days:
+        return jsonify({'error': 'facility_id, staff_contact_id, start, end, days required'}), 400
+    if _hhmm_to_minutes(start) < 0 or _hhmm_to_minutes(end) < 0:
+        return jsonify({'error': 'invalid time format'}), 400
+    staff_contact = db_get_staff_contact(int(staff_contact_id))
+    if not staff_contact:
+        return jsonify({'error': 'staff_contact_id not found'}), 400
+    if int(staff_contact.get('facility_id') or 0) != int(fid):
+        return jsonify({'error': 'staff_contact_id is outside this facility'}), 400
+    if int(staff_contact.get('active') or 0) != 1:
+        return jsonify({'error': 'staff_contact_id is inactive'}), 400
+    try:
+        created = db_create_shift_v2(
+            facility_id=int(fid),
+            staff_contact_id=int(staff_contact_id),
+            days_of_week=days,
+            start_time=start,
+            end_time=end,
+            timezone_name=timezone_name,
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception:
+        app.logger.exception('Failed to create shift')
+        return jsonify({'error': 'unable to create shift'}), 400
+    _audit_event('create_shift', str(created.get('id')), f'name={name}')
+    return jsonify(
+        {
+            'id': str(created.get('id')),
+            'name': name,
+            'start': created.get('start_time'),
+            'end': created.get('end_time'),
+            'days': _normalize_days(created.get('days_of_week') or []),
+            'staff_ids': [str(created.get('staff_contact_id'))] if created.get('staff_contact_id') is not None else [],
+            'facility_id': created.get('facility_id'),
+            'timezone': created.get('timezone'),
+        }
+    ), 201
+
+
+@app.route('/api/schedule/<schedule_id>', methods=['DELETE'])
+def schedule_delete(schedule_id: str):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    sid = _coerce_int(schedule_id, low=1)
+    if sid is None:
+        return jsonify({'error': 'invalid id'}), 400
+    ok = db_delete_shift_v2(sid)
+    if not ok:
+        return jsonify({'error': 'Not found'}), 404
+    _audit_event('delete_shift', str(sid))
+    return jsonify({'status': 'deleted'})
+
+
+@app.route('/api/admin/shifts', methods=['GET', 'POST'])
+def admin_shifts_api():
+    return schedule_api()
+
+
+@app.route('/api/admin/shifts/<int:shift_id>', methods=['DELETE'])
+def admin_shift_delete(shift_id: int):
+    return schedule_delete(str(shift_id))
+
+
+@app.route('/api/admin/devices', methods=['GET', 'POST'])
+def admin_devices_api():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    if request.method == 'GET':
+        fid = _admin_facility_scope_from_request()
+        return jsonify(db_list_devices(fid))
+    data = request.get_json(force=True) or {}
+    fid = _resolve_admin_facility_from_payload(data)
+    device_id = _clean_text(data.get('device_id') or data.get('id'), 80)
+    bed_id = _clean_text(data.get('bed_id'), 80)
+    capabilities = data.get('capabilities')
+    if not isinstance(capabilities, list):
+        capabilities = ['presence', 'fall']
+    firmware = _clean_text(data.get('firmware'), 120)
+    api_key_plain = _clean_text(data.get('api_key'), 128) or uuid4().hex
+    if fid is None or not device_id:
+        return jsonify({'error': 'facility_id and device_id required'}), 400
+
+    # If a bed_id was provided, validate it early to avoid FK constraint 500s.
+    if bed_id:
+        bed = db_get_bed(bed_id)
+        if not bed:
+            return jsonify({'error': 'invalid bed_id (not found)'}), 400
+        if int(bed.get('facility_id') or 0) != int(fid):
+            return jsonify({'error': 'invalid bed_id (facility mismatch)'}), 400
+        if int(bed.get('active') or 1) != 1:
+            return jsonify({'error': 'invalid bed_id (inactive)'}), 400
+    try:
+        created = db_upsert_device(
+            device_id=device_id,
+            facility_id=int(fid),
+            bed_id=bed_id,
+            api_key_hash=generate_password_hash(api_key_plain),
+            firmware=firmware,
+            capabilities=capabilities,
+            last_seen_at=None,
+        )
+    except sqlite3.IntegrityError as exc:
+        return jsonify({'error': f'device create failed: {exc}'}), 400
+    _audit_event('upsert_device', device_id, f'facility={fid}')
+    created['api_key'] = api_key_plain
+    return jsonify(created), 201
+
+
+@app.route('/api/admin/devices/<device_id>/rotate_key', methods=['POST'])
+def admin_rotate_device_key(device_id: str):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    device = db_get_device(device_id)
+    if not device:
+        return jsonify({'error': 'Not found'}), 404
+    if session.get('role') == 'facility_admin':
+        if int(device.get('facility_id') or 0) != int(_current_user_facility_id() or 0):
+            return jsonify({'error': 'Forbidden'}), 403
+    new_key = uuid4().hex
+    ok = db_rotate_device_api_key(device_id, generate_password_hash(new_key))
+    if not ok:
+        return jsonify({'error': 'Not found'}), 404
+    _audit_event('rotate_device_api_key', device_id)
+    return jsonify({'id': device_id, 'api_key': new_key})
+
+
+@app.route('/api/admin/devices/<device_id>', methods=['DELETE'])
+def admin_delete_device(device_id: str):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    device = db_get_device(device_id)
+    if not device:
+        return jsonify({'error': 'Not found'}), 404
+    if session.get('role') == 'facility_admin':
+        if int(device.get('facility_id') or 0) != int(_current_user_facility_id() or 0):
+            return jsonify({'error': 'Forbidden'}), 403
+    ok = db_soft_delete_device(device_id)
+    if not ok:
+        return jsonify({'error': 'Not found'}), 404
+    _audit_event('delete_device', device_id)
+    return jsonify({'status': 'deleted'})
+
+
+@app.route('/api/admin/devices/clear', methods=['POST'])
+def admin_clear_devices():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    if not _is_admin_role(session.get('role')):
+        return jsonify({'error': 'Forbidden'}), 403
+    data = request.get_json(silent=True) or {}
+    if data.get('confirm') is not True:
+        return jsonify({'error': 'confirm=true required'}), 400
+    fid = _resolve_admin_facility_from_payload(data)
+    if fid is None:
+        return jsonify({'error': 'facility_id required'}), 400
+    deleted = db_soft_delete_all_devices(int(fid))
+    _audit_event('clear_devices', None, f'facility={fid}, count={deleted}')
+    return jsonify({'status': 'ok', 'facility_id': int(fid), 'devices_cleared': deleted})
+
+
+@app.route('/api/bed_bundle')
+def bed_bundle():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    bed_id = _clean_text(request.args.get('bed_id'), 120)
+    if not bed_id:
+        return jsonify({'error': 'bed_id required'}), 400
+    beds = _scoped_beds_for_session(include_inactive=False)
+    bed = next((item for item in beds if str(item.get('id')) == bed_id), None)
+    if not bed:
+        return jsonify({'error': 'Forbidden'}), 403
+    latest = db_get_latest_telemetry_for_bed(bed_id)
+    hours = _coerce_int(request.args.get('hours'), low=1, high=24) or 6
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    trend_rows = db_list_telemetry_for_bed(bed_id, now_epoch - (hours * 3600), limit=2000)
+    trend = {
+        'rr': [{'ts': row.get('ts'), 'value': row.get('rr')} for row in trend_rows],
+        'hr': [{'ts': row.get('ts'), 'value': row.get('hr')} for row in trend_rows],
+        'presence': [{'ts': row.get('ts'), 'value': row.get('presence')} for row in trend_rows],
+        'fall': [{'ts': row.get('ts'), 'value': row.get('fall')} for row in trend_rows],
+    }
+    open_alerts = db_list_alerts(
+        bed.get('facility_id'),
+        bed_id=bed_id,
+        status='open',
+        limit=50,
+    )
+    on_duty = _contacts_on_duty(int(bed.get('facility_id')))
+    patient = db_get_patient_by_bed_id(bed_id)
+    checkins = []
+    goals = []
+    journal_entries = []
+    if patient and _patient_access_ok(int(patient.get('id'))):
+        checkins = db_list_checkins(int(patient.get('id')), limit=25)
+        goals = db_list_goals(int(patient.get('id')))
+        journal_entries = db_list_journal_entries(int(patient.get('id')), limit=10)
+    payload = {
+        'bed': _serialize_beds_with_live_summary([bed])[0],
+        'latest_telemetry': latest,
+        'trend': trend,
+        'open_alerts': open_alerts,
+        'on_duty_staff': on_duty,
+        'patient': patient,
+        'checkins': checkins,
+        'goals': goals,
+        'journal_entries': journal_entries,
+    }
+    _audit_event('view_bed_bundle', bed_id)
+    return jsonify(payload)
+
+
+@app.route('/api/alerts', methods=['GET'])
+def alerts_list():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    role = session.get('role')
+    if role not in ('super_admin', 'facility_admin', 'staff'):
+        return jsonify({'error': 'Forbidden'}), 403
+    facility_id = _admin_facility_scope_from_request() if role != 'staff' else _current_user_facility_id()
+    bed_id = _clean_text(request.args.get('bed_id'), 120)
+    status = _clean_text(request.args.get('status'), 16)
+    limit = _coerce_int(request.args.get('limit'), low=1, high=500) or 100
+    alerts = db_list_alerts(facility_id, bed_id=bed_id, status=status, limit=limit)
+    if role == 'staff':
+        allowed = _allowed_bed_ids_for_user() or set()
+        alerts = [item for item in alerts if str(item.get('bed_id')) in allowed]
+    return jsonify(alerts)
+
+
+@app.route('/api/alerts/<int:alert_id>/ack', methods=['POST'])
+def alerts_ack(alert_id: int):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    alert = db_get_alert(alert_id)
+    if not alert:
+        return jsonify({'error': 'Not found'}), 404
+    role = session.get('role')
+    if role == 'facility_admin' and alert.get('facility_id') != _current_user_facility_id():
+        return jsonify({'error': 'Forbidden'}), 403
+    if role == 'staff':
+        allowed = _allowed_bed_ids_for_user() or set()
+        if str(alert.get('bed_id')) not in allowed:
+            return jsonify({'error': 'Forbidden'}), 403
+    uid = _session_user_id()
+    if uid is None:
+        return jsonify({'error': 'Unauthorized'}), 401
+    acked = db_ack_alert(alert_id, uid, int(datetime.now(timezone.utc).timestamp()))
+    if not acked:
+        return jsonify({'error': 'alert not open'}), 409
+    _audit_event('ack_alert', str(alert_id))
+    return jsonify({'status': 'acked', 'alert': db_get_alert(alert_id)})
 
 # ---- User management API ----
 def _require_admin():
@@ -1822,72 +2490,220 @@ def profile_avatar():
     return jsonify({'avatar_url': url_for('static', filename=rel_path)})
 
 
-def _get_latest_rr_hr():
+def _send_termii_sms(to_number: str, body: str) -> tuple[bool, Dict[str, Any]]:
+    api_key = os.getenv('TERMII_API_KEY', '').strip()
+    sender = os.getenv('TERMII_SENDER_ID', '').strip() or 'NeuroSense'
+    channel = os.getenv('TERMII_CHANNEL', '').strip() or 'dnd'
+    if not api_key:
+        return False, {'provider': 'termii', 'skipped': True, 'reason': 'missing_api_key'}
+    payload = {
+        'api_key': api_key,
+        'to': to_number,
+        'from': sender,
+        'sms': body,
+        'type': 'plain',
+        'channel': channel,
+    }
+    req = urllib_request.Request(
+        'https://api.ng.termii.com/api/sms/send',
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
     try:
-        csv_files = glob.glob(os.path.join('data', 'sensor_data_*.csv'))
-        if not csv_files:
-            return None, None, None
-        frames = [pd.read_csv(fp) for fp in csv_files]
-        df = pd.concat(frames, ignore_index=True)
-        cols = {c.lower(): c for c in df.columns}
-        rr_col = cols.get('rr') or cols.get('respiration') or cols.get('respiration_rate')
-        hr_col = cols.get('hr') or cols.get('heart_rate')
-        ts_col = cols.get('timestamp')
-        if not rr_col and not hr_col:
-            return None, None, None
-        if ts_col:
-            df[ts_col] = pd.to_datetime(df[ts_col], errors='coerce')
-            df = df.sort_values(ts_col)
-        last = df.dropna(subset=[c for c in [rr_col, hr_col] if c]).iloc[-1]
-        rr = float(last[rr_col]) if rr_col and pd.notna(last[rr_col]) else None
-        hr = float(last[hr_col]) if hr_col and pd.notna(last[hr_col]) else None
-        ts = last[ts_col] if ts_col else None
-        if isinstance(ts, pd.Timestamp):
-            ts = ts.to_pydatetime()
-        return rr, hr, ts
-    except Exception:
-        return None, None, None
+        with urllib_request.urlopen(req, timeout=8) as resp:
+            raw = resp.read().decode('utf-8', errors='ignore')
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except Exception:
+                parsed = {'raw': raw}
+            ok = 200 <= resp.status < 300
+            return ok, {'provider': 'termii', 'status': resp.status, 'response': parsed}
+    except Exception as exc:
+        return False, {'provider': 'termii', 'error': str(exc)}
 
 
-def _send_sms(to_number: str, body: str) -> bool:
+def _send_twilio_sms(to_number: str, body: str) -> tuple[bool, Dict[str, Any]]:
     sid = os.getenv('TWILIO_ACCOUNT_SID', '').strip()
     tok = os.getenv('TWILIO_AUTH_TOKEN', '').strip()
     from_num = os.getenv('TWILIO_FROM_NUMBER', '').strip()
     if not sid or not tok or not from_num:
-        app.logger.info(f"[SMS MOCK] To {to_number}: {body}")
-        return True
+        return False, {'provider': 'twilio', 'skipped': True, 'reason': 'missing_credentials'}
     try:
         from twilio.rest import Client as _Twilio
+
         client = _Twilio(sid, tok)
-        client.messages.create(to=to_number, from_=from_num, body=body)
-        app.logger.info(f"SMS sent to {to_number}")
-        return True
-    except Exception as e:
-        app.logger.error(f"Twilio error: {e}")
+        msg = client.messages.create(to=to_number, from_=from_num, body=body)
+        return True, {'provider': 'twilio', 'sid': getattr(msg, 'sid', None)}
+    except Exception as exc:
+        return False, {'provider': 'twilio', 'error': str(exc)}
+
+
+def _send_sms(to_number: str, body: str) -> tuple[bool, Dict[str, Any]]:
+    if os.getenv('TERMII_API_KEY', '').strip():
+        ok, meta = _send_termii_sms(to_number, body)
+        if ok:
+            app.logger.info(f"Termii SMS sent to {to_number}")
+        else:
+            app.logger.warning(f"Termii SMS failed for {to_number}: {meta}")
+        return ok, meta
+    ok, meta = _send_twilio_sms(to_number, body)
+    if ok:
+        app.logger.info(f"Twilio SMS sent to {to_number}")
+        return True, meta
+    app.logger.info(f"[SMS MOCK] To {to_number}: {body}")
+    return True, {'provider': 'mock', 'note': 'No SMS provider configured', 'fallback': meta}
+
+
+_alert_cursor_id = 0
+_rr_low_windows: dict[str, deque[int]] = {}
+
+
+def _build_alert_message(alert_type: str, row: Dict[str, Any]) -> str:
+    bed_id = row.get('bed_id') or 'unknown-bed'
+    ts = int(row.get('ts') or int(datetime.now(timezone.utc).timestamp()))
+    when = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    if alert_type == 'FALL':
+        return f'FALL detected for {bed_id} at {when}.'
+    rr = row.get('rr')
+    rr_txt = f'{float(rr):.1f}' if rr is not None else 'n/a'
+    return f'Critical low respiration for {bed_id} (RR={rr_txt}/min) at {when}.'
+
+
+def _notify_alert_recipients(alert: Dict[str, Any]) -> Dict[str, Any]:
+    facility_id = _coerce_int(alert.get('facility_id'), low=1)
+    if facility_id is None:
+        return {'sent': [], 'failed': [], 'reason': 'missing_facility'}
+    recipients = _contacts_on_duty(facility_id)
+    sent: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for recipient in recipients:
+        phone = (recipient.get('phone_e164') or '').strip()
+        if not phone:
+            continue
+        ok, provider_meta = _send_sms(phone, alert.get('message') or '')
+        rec = {
+            'contact_id': recipient.get('id'),
+            'phone_e164': phone,
+            'provider': provider_meta,
+        }
+        if ok:
+            sent.append(rec)
+        else:
+            failed.append(rec)
+    return {'sent': sent, 'failed': failed}
+
+
+def _create_alert_from_row(
+    row: Dict[str, Any],
+    *,
+    alert_type: str,
+    severity: str,
+    debounce_open: bool = True,
+) -> Optional[Dict[str, Any]]:
+    bed_id = str(row.get('bed_id') or '')
+    if not bed_id:
+        return None
+    if debounce_open:
+        existing = db_get_open_alert_for_bed_type(bed_id, alert_type)
+        if existing:
+            return existing
+    alert = db_insert_alert(
+        facility_id=int(row.get('facility_id')),
+        bed_id=bed_id,
+        device_id=row.get('device_id'),
+        alert_type=alert_type,
+        severity=severity,
+        message=_build_alert_message(alert_type, row),
+        ts=int(row.get('ts') or datetime.now(timezone.utc).timestamp()),
+        meta={},
+    )
+    delivery = _notify_alert_recipients(alert)
+    meta = dict(alert.get('meta') or {})
+    meta['notifications'] = delivery
+    meta['rule'] = {
+        'type': alert_type,
+        'rr_threshold': float(os.getenv('ALERT_RR_THRESHOLD', '5')),
+        'confidence_min': float(os.getenv('ALERT_CONFIDENCE_MIN', '0.6')),
+    }
+    db_update_alert_meta(int(alert.get('id')), meta)
+    updated = db_get_alert(int(alert.get('id')))
+    _audit_event('create_alert', str(alert.get('id')), f"type={alert_type}, bed={bed_id}")
+    return updated
+
+
+def _row_rr_low_condition(row: Dict[str, Any]) -> bool:
+    rr = row.get('rr')
+    if rr is None:
         return False
+    try:
+        rr_value = float(rr)
+    except Exception:
+        return False
+    rr_threshold = float(os.getenv('ALERT_RR_THRESHOLD', '5'))
+    if rr_value >= rr_threshold:
+        return False
+    confidence_min = float(os.getenv('ALERT_CONFIDENCE_MIN', '0.6'))
+    confidence = row.get('confidence')
+    confidence_val = float(confidence) if confidence is not None else 0.0
+    presence = _normalize_bool_int(row.get('presence'))
+    return confidence_val >= confidence_min and presence == 1
 
 
-_last_alert_epoch = 0.0
+def _process_rr_low_alert(row: Dict[str, Any]) -> None:
+    bed_id = str(row.get('bed_id') or '')
+    if not bed_id:
+        return
+    ts = int(row.get('ts') or datetime.now(timezone.utc).timestamp())
+    window = _rr_low_windows.setdefault(bed_id, deque())
+    if _row_rr_low_condition(row):
+        window.append(ts)
+        while window and (ts - window[0]) > 120:
+            window.popleft()
+        if window and (ts - window[0]) >= 10:
+            _create_alert_from_row(row, alert_type='RR_LOW', severity='critical', debounce_open=True)
+        return
+    window.clear()
+    existing = db_get_open_alert_for_bed_type(bed_id, 'RR_LOW')
+    if existing:
+        db_resolve_alert(int(existing.get('id')))
+
+
+def _process_fall_alert(row: Dict[str, Any]) -> None:
+    if _normalize_bool_int(row.get('fall')) != 1:
+        return
+    _create_alert_from_row(row, alert_type='FALL', severity='critical', debounce_open=True)
+
+
+def _process_alert_row(row: Dict[str, Any]) -> None:
+    _process_fall_alert(row)
+    _process_rr_low_alert(row)
+
+
+def _alert_monitor_cycle() -> int:
+    global _alert_cursor_id
+    if _alert_cursor_id <= 0:
+        _alert_cursor_id = db_get_latest_telemetry_id()
+        return 0
+    rows = db_list_recent_telemetry_since(_alert_cursor_id, limit=400)
+    processed = 0
+    for row in rows:
+        processed += 1
+        _process_alert_row(row)
+        rid = int(row.get('id') or 0)
+        if rid > _alert_cursor_id:
+            _alert_cursor_id = rid
+    return processed
 
 
 def _alert_monitor_loop():
-    import time
-    global _last_alert_epoch
-    cooldown = int(os.getenv('ALERT_COOLDOWN_SEC', '600'))
-    rr_thresh = float(os.getenv('ALERT_RR_THRESHOLD', '5'))
+    poll_sec = _coerce_int(os.getenv('ALERT_POLL_SEC'), low=2, high=30) or 3
     while True:
         try:
-            rr, hr, ts = _get_latest_rr_hr()
-            if rr is not None and rr < rr_thresh:
-                now = time.time()
-                if now - _last_alert_epoch >= cooldown:
-                    for p in _on_duty_phone_numbers():
-                        when = ts.isoformat() if hasattr(ts, 'isoformat') else 'latest reading'
-                        _send_sms(p, f"ALERT: Low respiration detected (RR={rr:.1f}/min) at {when}.")
-                    _last_alert_epoch = now
-        except Exception as e:
-            app.logger.error(f"Alert monitor error: {e}")
-        time.sleep(60)
+            _alert_monitor_cycle()
+        except Exception as exc:
+            app.logger.error(f"Alert monitor error: {exc}")
+        time.sleep(poll_sec)
 
 
 @app.route('/api/alerts/test', methods=['POST'])
@@ -1896,16 +2712,30 @@ def alerts_test():
         return jsonify({'error': 'Unauthorized'}), 401
     payload = request.get_json(silent=True) or {}
     targets = payload.get('to')
-    if not targets:
-        targets = _on_duty_phone_numbers()
-    ok = True
-    for p in targets:
-        ok = _send_sms(p, 'Test alert from non-contact monitor.') and ok
-    return jsonify({'status': 'ok' if ok else 'partial', 'recipients': targets})
+    recipients: List[str] = []
+    if isinstance(targets, list):
+        recipients = [str(x).strip() for x in targets if str(x).strip()]
+    elif isinstance(targets, str) and targets.strip():
+        recipients = [targets.strip()]
+    if not recipients:
+        fid = _admin_facility_scope_from_request() if session.get('role') != 'staff' else _current_user_facility_id()
+        if fid is not None:
+            recipients = [c.get('phone_e164') for c in _contacts_on_duty(int(fid)) if c.get('phone_e164')]
+    sent = []
+    failed = []
+    for phone in recipients:
+        ok, meta = _send_sms(phone, 'Test alert from NeuroSense bed monitor.')
+        row = {'phone_e164': phone, 'provider': meta}
+        if ok:
+            sent.append(row)
+        else:
+            failed.append(row)
+    return jsonify({'status': 'ok' if not failed else 'partial', 'sent': sent, 'failed': failed})
 
 
 def start_background_tasks():
     import threading
+    global _alert_cursor_id
     if app.config.get('TESTING'):
         return
     if os.getenv('DISABLE_ALERT_MONITOR', '0') == '1':
@@ -1914,6 +2744,7 @@ def start_background_tasks():
         return
     if app.debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         return
+    _alert_cursor_id = db_get_latest_telemetry_id()
     t = threading.Thread(target=_alert_monitor_loop, name='alert-monitor', daemon=True)
     t.start()
 
