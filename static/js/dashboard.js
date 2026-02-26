@@ -164,6 +164,9 @@ function updateUIForCurrentRole(){
     const isAdmin = currentUser.id === 'super_admin' || currentUser.id === 'facility_admin';
     adminNav.style.display = isAdmin ? '' : 'none';
   }
+  if(window.chatbot && typeof window.chatbot.updateUserContext === 'function'){
+    window.chatbot.updateUserContext(currentUser.userName || null, currentUser.name || null);
+  }
   filterDataBasedOnRole();
 }
 function filterDataBasedOnRole(){
@@ -241,6 +244,27 @@ function initAvatarUpload(){
       avatarUpload.value = '';
     }
   };
+}
+
+function initChatbot(){
+  if(typeof window.PatientChatbot !== 'function'){
+    return;
+  }
+  if(!window.chatbot){
+    window.chatbot = new window.PatientChatbot();
+  }
+  const selected = selectedPatientId
+    ? patientsCache.find(p => String(p.id) === String(selectedPatientId))
+    : null;
+  const facilityId = currentUser && currentUser.facilityId ? currentUser.facilityId : null;
+  const userName = currentUser && currentUser.userName ? currentUser.userName : null;
+  const userRole = currentUser && currentUser.name ? currentUser.name : null;
+  if(window.chatbot && typeof window.chatbot.updateUserContext === 'function'){
+    window.chatbot.updateUserContext(userName, userRole);
+  }
+  if(window.chatbot && typeof window.chatbot.updateContext === 'function'){
+    window.chatbot.updateContext(selectedPatientId, facilityId, selected ? selected.name : null);
+  }
 }
 
 async function uploadProfileAvatar(file){
@@ -2964,6 +2988,11 @@ function selectPatient(id){
     closeCommandPalette();
   }
   afterPatientChanged();
+  if(window.chatbot && typeof window.chatbot.updateContext === 'function'){
+    const selected = patientsCache.find(p => String(p.id) === idStr);
+    const facilityId = currentUser && currentUser.facilityId ? currentUser.facilityId : null;
+    window.chatbot.updateContext(idStr, facilityId, selected ? selected.name : null);
+  }
 }
 
 function resetPatientCard(){
@@ -3095,6 +3124,13 @@ function afterPatientChanged(){
   }
   loadPatientBundle();
   updatePatientEmptyStates();
+  if(window.chatbot && typeof window.chatbot.updateContext === 'function'){
+    const selected = selectedPatientId
+      ? patientsCache.find(p => String(p.id) === String(selectedPatientId))
+      : null;
+    const facilityId = currentUser && currentUser.facilityId ? currentUser.facilityId : null;
+    window.chatbot.updateContext(selectedPatientId, facilityId, selected ? selected.name : null);
+  }
 }
 
 // ----- Command Palette -----
@@ -3291,7 +3327,7 @@ function renderCommandPaletteMatches(term){
   if(!commandPaletteMatches.length){
     const empty = document.createElement('li');
     empty.className = 'command-palette-empty';
-    empty.textContent = term ? 'No results found.' : 'Start typing to search patients or actions.';
+    empty.textContent = term ? 'No results found.' : 'Type a patient, alert, or action (for example: sync, goal, alerts).';
     commandPaletteList.appendChild(empty);
     return;
   }
@@ -3669,7 +3705,7 @@ function initBedCharts(){
         labels:[],
         datasets:[
           {
-            label:'Presence',
+            label:'Occupancy',
             data:[],
             borderColor: colorSuccess,
             backgroundColor: 'rgba(34, 197, 94, 0.15)',
@@ -3677,15 +3713,6 @@ function initBedCharts(){
             stepped:true,
             pointRadius:0,
             borderWidth:2,
-          },
-          {
-            label:'Fall',
-            data:[],
-            borderColor: colorDanger,
-            backgroundColor: colorDanger,
-            showLine:false,
-            pointRadius:4,
-            pointHoverRadius:5,
           }
         ]
       },
@@ -3693,10 +3720,7 @@ function initBedCharts(){
         ...baseLineOptions,
         plugins: {
           ...baseLineOptions.plugins,
-          legend: {
-            display: true,
-            labels: { color: textColor, usePointStyle: true, pointStyle: 'circle' },
-          },
+          legend: { display: false },
         },
         scales: {
           ...baseLineOptions.scales,
@@ -3740,17 +3764,14 @@ function updateBedChart(chart, points){
   chart.update();
 }
 
-function updateBedPresenceChart(pointsPresence, pointsFall){
+function updateBedPresenceChart(pointsPresence){
   if(!bedCharts.presence) return;
   const presenceRows = Array.isArray(pointsPresence) ? pointsPresence : [];
-  const fallRows = Array.isArray(pointsFall) ? pointsFall : [];
   const maxPoints = 240;
   const step = presenceRows.length > maxPoints ? Math.ceil(presenceRows.length / maxPoints) : 1;
   const pThin = step > 1 ? presenceRows.filter((_, idx) => idx % step === 0) : presenceRows;
   bedCharts.presence.data.labels = pThin.map(p => formatEpochSeconds(p.ts));
   bedCharts.presence.data.datasets[0].data = pThin.map(p => (p.value ? 1 : 0));
-  const fallMap = new Map(fallRows.map(r => [String(r.ts), r.value ? 1 : 0]));
-  bedCharts.presence.data.datasets[1].data = pThin.map(p => (fallMap.get(String(p.ts)) === 1 ? 1 : null));
   bedCharts.presence.update();
 }
 
@@ -3852,12 +3873,11 @@ async function loadBedBundle(bedId){
     setText('bedDetailLastSeen', `Last seen: ${formatEpochSeconds(bed.last_seen_at)}`);
     const latest = bundle.latest_telemetry || {};
     setText('bedKpiPresence', latest.presence === null || latest.presence === undefined ? '--' : (latest.presence ? 'Occupied' : 'Empty'));
-    setText('bedKpiFall', latest.fall === null || latest.fall === undefined ? '--' : (latest.fall ? 'Fall detected' : 'Clear'));
     setText('bedKpiRr', latest.rr === null || latest.rr === undefined ? '--' : `${Number(latest.rr).toFixed(1)} /min`);
     setText('bedKpiHr', latest.hr === null || latest.hr === undefined ? '--' : `${Number(latest.hr).toFixed(1)} bpm`);
     updateBedChart(bedCharts.rr, bundle?.trend?.rr || []);
     updateBedChart(bedCharts.hr, bundle?.trend?.hr || []);
-    updateBedPresenceChart(bundle?.trend?.presence || [], bundle?.trend?.fall || []);
+    updateBedPresenceChart(bundle?.trend?.presence || []);
     renderBedAlerts(bundle.open_alerts || []);
     renderBedDuty(bundle.on_duty_staff || []);
   }catch(err){
@@ -3900,7 +3920,6 @@ function renderBedRoster(items){
           <div class="meta">${escapeHtml(bed.room ? `Room ${bed.room}` : 'No room')} ${bed.patient ? `| ${escapeHtml(bed.patient)}` : ''}</div>
           <div class="status-row">
             <span class="badge ${bed.occupied ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary'}">${occupied}</span>
-            <span class="badge ${bed.fall ? 'bg-danger-subtle text-danger' : 'bg-light text-muted'}">${bed.fall ? 'Fall' : 'No Fall'}</span>
             <span class="badge ${stale ? 'bg-warning-subtle text-warning' : 'bg-primary-subtle text-primary'}">${stale ? 'Stale' : 'Live'}</span>
           </div>
         </div>
@@ -3934,8 +3953,6 @@ function applyBedRosterFilters(){
   }
   if(bedRosterFilter === 'occupied'){
     filtered = filtered.filter(b => b.occupied === true);
-  }else if(bedRosterFilter === 'fall'){
-    filtered = filtered.filter(b => !!b.fall);
   }else if(bedRosterFilter === 'stale'){
     filtered = filtered.filter(b => isStaleLastSeen(b.last_seen_at));
   }
@@ -4045,6 +4062,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initPatientDrawer();
   initUser().then(() => {
     initPatientSelector();
+    initChatbot();
     initBedMonitoring();
     initFacilityUi();
     initAdminUi();
@@ -4052,6 +4070,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }).catch(err => {
     console.error('[dashboard] initUser promise rejected', err);
     initPatientSelector();
+    initChatbot();
     initBedMonitoring();
     initFacilityUi();
     updatePatientEmptyStates();

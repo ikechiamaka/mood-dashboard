@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from zoneinfo import ZoneInfo
 from urllib import request as urllib_request
+import hashlib
 from dotenv import load_dotenv
 try:
     import openai
@@ -592,31 +593,980 @@ if openai is not None:
     openai.api_key = key if key else None
 
 
+def _chat_scoped_patient(patient_id: int) -> Optional[Dict[str, Any]]:
+    patient = db_get_patient_by_id(patient_id)
+    if not patient:
+        return None
+    role = session.get('role')
+    if role == 'super_admin':
+        return patient
+    user_facility = _current_user_facility_id()
+    patient_facility = _coerce_int(patient.get('facility_id'), low=1)
+    if role == 'facility_admin':
+        if user_facility is None or patient_facility != int(user_facility):
+            return None
+        return patient
+    if role == 'staff':
+        if not _patient_access_ok(patient_id):
+            return None
+        if user_facility is None or patient_facility != int(user_facility):
+            return None
+        return patient
+    return None
+
+
+def _chat_resolve_facility_scope(requested_facility_id: Optional[int], patient: Optional[Dict[str, Any]]) -> Optional[int]:
+    patient_facility = _coerce_int((patient or {}).get('facility_id'), low=1)
+    if patient_facility is not None:
+        return patient_facility
+    role = session.get('role')
+    if role == 'super_admin':
+        return requested_facility_id
+    user_facility = _current_user_facility_id()
+    if requested_facility_id is not None and user_facility is not None and int(requested_facility_id) != int(user_facility):
+        return None
+    return user_facility
+
+
+def _chat_list_scoped_patients(facility_id: Optional[int]) -> List[Dict[str, Any]]:
+    role = session.get('role')
+    if role == 'super_admin':
+        return db_list_patients(facility_id)
+    user_facility = _current_user_facility_id()
+    if user_facility is None:
+        return []
+    if facility_id is not None and int(facility_id) != int(user_facility):
+        return []
+    if role == 'facility_admin':
+        return db_list_patients(user_facility)
+    assigned = [int(x) for x in (session.get('assigned_patient_ids') or []) if str(x).isdigit()]
+    if not assigned:
+        return []
+    return db_list_patients(user_facility, assigned)
+
+
+def _chat_normalize_text(value: Any) -> str:
+    return re.sub(r'[^a-z0-9]+', ' ', str(value or '').lower()).strip()
+
+
+def _chat_facility_label(facility_id: Any) -> str:
+    fid = _coerce_int(facility_id, low=1)
+    if fid is None:
+        return 'N/A'
+    fac = db_get_facility(fid) or {}
+    name = str(fac.get('name') or '').strip()
+    if name:
+        return name
+    return f'Facility {fid}'
+
+
+def _chat_state_get_ids(key: str) -> List[int]:
+    raw = session.get(key) or []
+    out: List[int] = []
+    if isinstance(raw, list):
+        for item in raw:
+            val = _coerce_int(item, low=1)
+            if val is not None:
+                out.append(val)
+    return out
+
+
+def _chat_state_set(last_patient_ids: Optional[List[int]] = None, listed_patient_ids: Optional[List[int]] = None) -> None:
+    changed = False
+    if last_patient_ids is not None:
+        session['chat_last_patient_ids'] = [int(x) for x in last_patient_ids[:5]]
+        changed = True
+    if listed_patient_ids is not None:
+        session['chat_last_list_patient_ids'] = [int(x) for x in listed_patient_ids[:12]]
+        changed = True
+    if changed:
+        session.modified = True
+
+
+def _chat_find_named_patients_in_scope(message: str, facility_id: Optional[int]) -> List[Dict[str, Any]]:
+    msg_norm = _chat_normalize_text(message)
+    if not msg_norm:
+        return []
+    patients = _chat_list_scoped_patients(facility_id)
+    matches: List[tuple[int, Dict[str, Any]]] = []
+    seen_ids: set[int] = set()
+    for patient in patients:
+        pid = _coerce_int(patient.get('id'), low=1)
+        if pid is None or pid in seen_ids:
+            continue
+        name = str(patient.get('name') or '').strip()
+        if not name:
+            continue
+        full_norm = _chat_normalize_text(name)
+        first_norm = _chat_normalize_text(name.split()[0]) if name.split() else ''
+        hit_len = 0
+        if full_norm and full_norm in msg_norm:
+            hit_len = len(full_norm)
+        elif first_norm and len(first_norm) >= 4 and re.search(rf'(^|\s){re.escape(first_norm)}($|\s)', msg_norm):
+            hit_len = len(first_norm)
+        if hit_len:
+            seen_ids.add(pid)
+            matches.append((hit_len, patient))
+    matches.sort(key=lambda pair: pair[0], reverse=True)
+    return [p for _, p in matches]
+
+
+def _chat_resolve_referenced_patients(
+    user_msg: str,
+    facility_id: Optional[int],
+    scoped_patient: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    named = _chat_find_named_patients_in_scope(user_msg, facility_id)
+    if named:
+        return named
+
+    patients = _chat_list_scoped_patients(facility_id)
+    by_id = {
+        int(pid): p
+        for p in patients
+        if (pid := _coerce_int(p.get('id'), low=1)) is not None
+    }
+    text = f" {_chat_normalize_text(user_msg)} "
+    plural_tokens = (' they ', ' them ', ' those patients ', ' these patients ')
+    singular_tokens = (' she ', ' her ', ' he ', ' him ', ' that patient ', ' this patient ')
+
+    if any(tok in text for tok in plural_tokens):
+        ids = _chat_state_get_ids('chat_last_list_patient_ids')
+        rows = [by_id[i] for i in ids if i in by_id]
+        if rows:
+            return rows
+
+    if any(tok in text for tok in singular_tokens) or text.strip().startswith('what about'):
+        if scoped_patient:
+            return [scoped_patient]
+        ids = _chat_state_get_ids('chat_last_patient_ids')
+        rows = [by_id[i] for i in ids[:1] if i in by_id]
+        if rows:
+            return rows
+
+    return [scoped_patient] if scoped_patient else []
+
+
+def _build_patient_chatbot_context(patient: Dict[str, Any], no_phi: bool = False) -> str:
+    patient_id = _coerce_int(patient.get('id'), low=1)
+    if patient_id is None:
+        return ''
+    facility_id = _coerce_int(patient.get('facility_id'), low=1)
+    bed_id = (patient.get('bed_id') or '').strip()
+    latest_telemetry = db_get_latest_telemetry_for_bed(bed_id) if bed_id else None
+    alerts = db_list_alerts(facility_id, bed_id=bed_id or None, status='open', limit=10)
+    goals = db_list_goals(patient_id)
+    checkins = db_list_checkins(patient_id, limit=5)
+    journals = db_list_journal_entries(patient_id, limit=3)
+    active_goals = [g for g in goals if (g.get('status') or '').lower() in ('active', 'in_progress', 'pending')]
+
+    if latest_telemetry:
+        hr = latest_telemetry.get('hr')
+        rr = latest_telemetry.get('rr')
+        presence = latest_telemetry.get('presence')
+        fall = latest_telemetry.get('fall')
+        vitals_line = (
+            f"Latest telemetry: HR={hr if hr is not None else 'n/a'} bpm, "
+            f"RR={rr if rr is not None else 'n/a'} rpm, "
+            f"presence={presence if presence is not None else 'n/a'}, "
+            f"fall={fall if fall is not None else 'n/a'}."
+        )
+    else:
+        vitals_line = "Latest telemetry: unavailable."
+
+    latest_checkin = checkins[0] if checkins else {}
+    latest_journal = journals[0] if journals else {}
+    patient_name = patient.get('name') or 'Unknown'
+    patient_ref = patient_id
+    facility_ref = patient.get('facility_id') or 'N/A'
+    bed_ref = bed_id or 'Unassigned'
+    latest_journal_note = (latest_journal.get('text') or 'n/a')[:220]
+    if no_phi:
+        patient_name = _mask_identifier(patient_name, 'PAT')
+        patient_ref = _mask_identifier(patient_id, 'PID')
+        facility_ref = _mask_identifier(facility_id, 'FAC')
+        bed_ref = _mask_identifier(bed_id or 'UNASSIGNED', 'BED')
+        latest_journal_note = '[redacted]'
+    lines = [
+        "Patient Context:",
+        f"- Name: {patient_name} (ID: {patient_ref})",
+        f"- Facility: {facility_ref} | Bed: {bed_ref}",
+        f"- Age: {patient.get('age') or 'N/A'} | Risk: {patient.get('risk_level') or 'N/A'}",
+        f"- Condition: {patient.get('primary_condition') or 'N/A'}",
+        f"- Care focus: {patient.get('care_focus') or 'N/A'}",
+        f"- {vitals_line}",
+        f"- Open alerts: {len(alerts)} | Active goals: {len(active_goals)}",
+        f"- Latest check-in mood: {latest_checkin.get('mood') if latest_checkin else 'n/a'}",
+        f"- Latest journal note: {latest_journal_note}",
+    ]
+    return '\n'.join(lines)
+
+
+def _build_facility_chatbot_context(facility_id: Optional[int], no_phi: bool = False) -> str:
+    patients = _chat_list_scoped_patients(facility_id)
+    allowed_bed_ids = _allowed_bed_ids_for_user()
+    beds = db_list_beds_scoped(
+        facility_id,
+        allowed_bed_ids=list(allowed_bed_ids) if allowed_bed_ids is not None else None,
+        include_inactive=False,
+    )
+    bed_summary = _serialize_beds_with_live_summary(beds) if beds else []
+    open_alerts = db_list_alerts(facility_id, status='open', limit=25)
+    if allowed_bed_ids is not None:
+        open_alerts = [a for a in open_alerts if str(a.get('bed_id') or '') in allowed_bed_ids]
+
+    total_patients = len(patients)
+    high_risk = sum(1 for p in patients if str(p.get('risk_level') or '').lower() == 'high')
+    total_beds = len(bed_summary)
+    occupied = sum(1 for b in bed_summary if b.get('occupied') is True)
+    fall_flags = sum(1 for b in bed_summary if bool(b.get('fall')))
+    now_ts = int(dt.now(timezone.utc).timestamp())
+    stale = sum(1 for b in bed_summary if b.get('last_seen_at') and now_ts - int(b.get('last_seen_at') or 0) > 300)
+    top_alerts = open_alerts[:5]
+    high_risk_patients = [p for p in patients if str(p.get('risk_level') or '').lower() == 'high']
+    alerts_by_bed: dict[str, int] = {}
+    for alert in open_alerts:
+        key = str(alert.get('bed_id') or '')
+        alerts_by_bed[key] = alerts_by_bed.get(key, 0) + 1
+
+    lines = [
+        "Facility Context:",
+        f"- Facility: {_mask_identifier(facility_id if facility_id is not None else 'SCOPED', 'FAC') if no_phi else (facility_id if facility_id is not None else 'Scoped view')}",
+        f"- Patients in scope: {total_patients} | High risk: {high_risk}",
+        f"- Beds in scope: {total_beds} | Occupied: {occupied} | Fall flags: {fall_flags} | Stale telemetry: {stale}",
+        f"- Open alerts in scope: {len(open_alerts)}",
+    ]
+    if top_alerts:
+        lines.append("- Top open alerts:")
+        for alert in top_alerts:
+            bed_label = alert.get('bed_id') or 'N/A'
+            if no_phi:
+                bed_label = _mask_identifier(bed_label, 'BED')
+            msg_text = (alert.get('message') or '')[:140]
+            if no_phi:
+                msg_text = '[redacted]'
+            lines.append(
+                f"  - [{alert.get('severity') or 'info'}] {alert.get('type') or 'ALERT'} "
+                f"on bed {bed_label}: {msg_text}"
+            )
+    if high_risk_patients:
+        lines.append("- High-risk patient summaries:")
+        for patient in high_risk_patients[:8]:
+            bed_raw = str(patient.get('bed_id') or 'Unassigned')
+            bed_label = _mask_identifier(bed_raw, 'BED') if no_phi else bed_raw
+            patient_label = patient.get('name') or f"Patient {patient.get('id')}"
+            if no_phi:
+                patient_label = _mask_identifier(patient_label, 'PAT')
+            condition = (patient.get('primary_condition') or 'N/A')
+            care_focus = (patient.get('care_focus') or 'N/A')
+            if no_phi:
+                condition = _sanitize_free_text(condition, max_len=80)
+                care_focus = _sanitize_free_text(care_focus, max_len=80)
+            lines.append(
+                f"  - {patient_label} | Bed: {bed_label} | "
+                f"Condition: {condition} | Care focus: {care_focus} | "
+                f"Open alerts: {alerts_by_bed.get(bed_raw, 0)}"
+            )
+    else:
+        lines.append("- High-risk patient summaries: none in current scope.")
+    return '\n'.join(lines)
+
+
+def _build_chatbot_system_prompt(context_text: str, no_phi: bool = False) -> str:
+    role = session.get('role') or 'staff'
+    facility = _current_user_facility_id()
+    display = (session.get('display_name') or '').strip()
+    email = (session.get('user') or '').strip()
+    user_label = display or email or 'session-user'
+    if no_phi:
+        user_label = _mask_identifier(user_label, 'USER')
+    return (
+        "You are NeuroSense Patient Assistant for a healthcare dashboard.\n"
+        "Rules:\n"
+        "- Use ONLY the supplied context and the user's message.\n"
+        "- Do not invent patients, beds, alerts, or details not explicitly present in context.\n"
+        "- If context is missing, say what is unavailable.\n"
+        "- Be concise, clinical, and operationally useful.\n"
+        "- Do not claim to diagnose or prescribe.\n"
+        "- Response style: plain language, no markdown headings (`#`, `##`, `###`).\n"
+        "- Start with a direct answer to the user's question.\n"
+        "- Use short bullets only when they improve clarity.\n"
+        "- Keep output under 140 words unless user asks for more detail.\n"
+        "- Prefer real names/aliases available in context; do not use placeholders like `Patient 2`.\n"
+        f"- Current user: {user_label}.\n"
+        f"- Current user role: {role}.\n\n"
+        f"- Current user facility scope: {facility if facility is not None else 'network'}.\n\n"
+        f"{context_text}"
+    )
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _chat_local_only_enabled() -> bool:
+    # Default to local-only to avoid sending patient context outside the app.
+    return _env_flag('CHATBOT_LOCAL_ONLY', True)
+
+
+def _chat_no_phi_enabled() -> bool:
+    # When cloud chat is enabled, redact identifiers by default.
+    return _env_flag('CHATBOT_NO_PHI', True)
+
+
+def _chat_reidentify_output_enabled() -> bool:
+    # Replace de-identified aliases in model output with local names/labels for the signed-in user.
+    return _env_flag('CHATBOT_REIDENTIFY_OUTPUT', True)
+
+
+def _chat_provider_error_name(exc: Exception) -> str:
+    return exc.__class__.__name__
+
+
+def _chat_provider_debug_flags() -> dict[str, bool]:
+    return {
+        'openai_base_url_set': bool((os.getenv('OPENAI_BASE_URL') or '').strip()),
+        'https_proxy_set': bool((os.getenv('HTTPS_PROXY') or os.getenv('https_proxy') or '').strip()),
+        'http_proxy_set': bool((os.getenv('HTTP_PROXY') or os.getenv('http_proxy') or '').strip()),
+        'no_proxy_set': bool((os.getenv('NO_PROXY') or os.getenv('no_proxy') or '').strip()),
+    }
+
+
+def _detect_chat_query_type(message: str) -> str:
+    text = (message or '').strip().lower()
+    if not text:
+        return 'general'
+    if text.startswith('how many') or ' number of ' in f' {text} ':
+        return 'count_lookup'
+    if any(token in text for token in ('what is the chatbot', 'what is this chatbot', 'what can you do', 'help', 'about chatbot', 'about this chatbot')):
+        return 'about'
+    if any(token in text for token in ('what is my role', 'my role', 'admin level')):
+        return 'role_info'
+    if any(token in text for token in ('how many facilities', 'facilities do i have access', 'facility access', 'which facilities do i have access')):
+        return 'scope_info'
+    if any(token in text for token in ('summary', 'summarize', 'handoff', 'overview')):
+        return 'patient_summary'
+    if any(token in text for token in ('which facility', 'what facility', 'which facilities are they in', 'what facility is she in', 'what facility is he in')):
+        return 'patient_facility_lookup'
+    if any(token in text for token in ('what about', 'tell me about')) and 'chatbot' not in text:
+        return 'patient_detail_lookup'
+    if any(token in text for token in ('risk', 'critical', 'urgent', 'attention')):
+        return 'risk_triage'
+    if any(token in text for token in ('occupancy', 'bed status', 'empty', 'occupied', 'stale')):
+        return 'bed_status'
+    if any(token in text for token in ('alert', 'fall', 'rr low', 'respiratory')):
+        return 'alerts'
+    if any(token in text for token in ('trend', 'mood', 'activity', 'vitals', 'heart rate', 'respiratory rate')):
+        return 'trends'
+    return 'general'
+
+
+def _chat_parse_count_query(message: str) -> tuple[str, str]:
+    text = f" {_chat_normalize_text(message)} "
+    qualifier = 'available'
+    if ' access ' in text or ' have access ' in text or ' can access ' in text:
+        qualifier = 'access'
+    if ' open ' in text:
+        qualifier = 'open'
+    if ' occupied ' in text:
+        qualifier = 'occupied'
+    if ' empty ' in text:
+        qualifier = 'empty'
+    if ' stale ' in text:
+        qualifier = 'stale'
+    if ' high risk ' in text or ' highrisk ' in text:
+        qualifier = 'high_risk'
+    if ' on duty ' in text or ' onduty ' in text:
+        qualifier = 'on_duty'
+
+    entity = 'items'
+    if any(token in text for token in (' facilit', ' facility ')):
+        entity = 'facilities'
+    elif any(token in text for token in (' patient', ' patients ')):
+        entity = 'patients'
+    elif any(token in text for token in (' bed', ' beds ')):
+        entity = 'beds'
+    elif any(token in text for token in (' device', ' devices ')):
+        entity = 'devices'
+    elif any(token in text for token in (' alert', ' alerts ')):
+        entity = 'alerts'
+    elif any(token in text for token in (' staff', ' nurses ', ' contacts ')):
+        entity = 'staff'
+    elif any(token in text for token in (' shift', ' shifts ')):
+        entity = 'shifts'
+    elif any(token in text for token in (' goal', ' goals ')):
+        entity = 'goals'
+    return entity, qualifier
+
+
+def _mask_identifier(value: Any, prefix: str) -> str:
+    raw = str(value or '').strip()
+    if not raw:
+        return f"{prefix}-NA"
+    digest = hashlib.sha256(raw.encode('utf-8')).hexdigest()[:8].upper()
+    return f"{prefix}-{digest}"
+
+
+def _sanitize_free_text(value: Any, max_len: int = 220) -> str:
+    text = str(value or '')
+    if not text:
+        return 'n/a'
+    text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[redacted-email]', text)
+    text = re.sub(r'\+?\d[\d\-\s\(\)]{7,}\d', '[redacted-phone]', text)
+    text = re.sub(r'\b(?:DEV|BED|FAC|NS)-?[A-Za-z0-9\-]+\b', '[redacted-id]', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b\d{6,}\b', '[redacted-number]', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:max_len] if text else 'n/a'
+
+
+def _sanitize_user_message_for_openai(user_msg: str, patient: Optional[Dict[str, Any]]) -> str:
+    safe = _sanitize_free_text(user_msg, max_len=600)
+    name = ((patient or {}).get('name') or '').strip()
+    if name:
+        safe = re.sub(re.escape(name), 'selected patient', safe, flags=re.IGNORECASE)
+    return safe
+
+
+def _normalize_chatbot_reply_text(text: str) -> str:
+    raw_lines = str(text or '').splitlines()
+    cleaned: List[str] = []
+    drop_labels = {'summary', 'priority patients', 'immediate actions', 'data gaps'}
+    blank_count = 0
+    for line in raw_lines:
+        normalized = re.sub(r'^\s{0,3}#{1,6}\s*', '', line).strip()
+        if normalized.rstrip(':').strip().lower() in drop_labels:
+            continue
+        if not normalized:
+            blank_count += 1
+            if blank_count <= 1:
+                cleaned.append('')
+            continue
+        blank_count = 0
+        cleaned.append(normalized)
+    return '\n'.join(cleaned).strip()
+
+
+def _build_no_phi_alias_maps(
+    facility_scope: Optional[int],
+    scoped_patient: Optional[Dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    patient_map: dict[str, str] = {}
+    bed_map: dict[str, str] = {}
+    facility_map: dict[str, str] = {}
+
+    patients = _chat_list_scoped_patients(facility_scope)
+    if scoped_patient:
+        spid = str(scoped_patient.get('id') or '')
+        if not any(str(p.get('id') or '') == spid for p in patients):
+            patients = [*patients, scoped_patient]
+    for patient in patients:
+        display = str(patient.get('name') or '').strip() or f"Patient {patient.get('id')}"
+        alias = _mask_identifier(display, 'PAT')
+        patient_map[alias] = display
+        pfid = _coerce_int(patient.get('facility_id'), low=1)
+        if pfid is not None:
+            facility_map[_mask_identifier(pfid, 'FAC')] = _chat_facility_label(pfid)
+
+    allowed = _allowed_bed_ids_for_user()
+    beds = db_list_beds_scoped(
+        facility_scope,
+        allowed_bed_ids=list(allowed) if allowed is not None else None,
+        include_inactive=False,
+    )
+    for bed in beds:
+        bed_id = str(bed.get('id') or '').strip()
+        if not bed_id:
+            continue
+        alias = _mask_identifier(bed_id, 'BED')
+        bed_map[alias] = str(bed.get('label') or bed_id)
+    if scoped_patient:
+        sp_bed = str(scoped_patient.get('bed_id') or '').strip()
+        if sp_bed:
+            alias = _mask_identifier(sp_bed, 'BED')
+            bed_map.setdefault(alias, sp_bed)
+        pfid = _coerce_int(scoped_patient.get('facility_id'), low=1)
+        if pfid is not None:
+            facility_map[_mask_identifier(pfid, 'FAC')] = _chat_facility_label(pfid)
+
+    if facility_scope is not None:
+        facility_map[_mask_identifier(facility_scope, 'FAC')] = _chat_facility_label(facility_scope)
+
+    return patient_map, bed_map, facility_map
+
+
+def _restore_aliases_in_text(
+    text: str,
+    patient_map: dict[str, str],
+    bed_map: dict[str, str],
+    facility_map: Optional[dict[str, str]] = None,
+) -> str:
+    rendered = str(text or '')
+    for alias, value in patient_map.items():
+        rendered = re.sub(rf"\b{re.escape(alias)}\b", value, rendered)
+    for alias, value in bed_map.items():
+        rendered = re.sub(rf"\b{re.escape(alias)}\b", value, rendered)
+    for alias, value in (facility_map or {}).items():
+        rendered = re.sub(rf"\b{re.escape(alias)}\b", value, rendered)
+    return rendered
+
+
+def _build_local_chat_reply(
+    query_type: str,
+    user_msg: str,
+    scoped_patient: Optional[Dict[str, Any]],
+    facility_scope: Optional[int],
+) -> str:
+    def _fmt_elapsed(ts_val: Any) -> str:
+        ts_int = _coerce_int(ts_val, low=1)
+        if ts_int is None:
+            return 'time unknown'
+        delta = max(0, int(dt.now(timezone.utc).timestamp()) - ts_int)
+        if delta < 60:
+            return 'just now'
+        if delta < 3600:
+            return f"{delta // 60}m ago"
+        if delta < 86400:
+            return f"{delta // 3600}h ago"
+        return f"{delta // 86400}d ago"
+
+    def _short_bed(value: Any) -> str:
+        text = str(value or 'N/A')
+        if len(text) <= 16:
+            return text
+        return f"{text[:8]}...{text[-4:]}"
+
+    def _patient_detail_lines(patient: Dict[str, Any], for_handoff: bool = False) -> List[str]:
+        patient_id = _coerce_int(patient.get('id'), low=1)
+        bed_id = str(patient.get('bed_id') or '').strip()
+        facility_id = _coerce_int(patient.get('facility_id'), low=1)
+        latest_telemetry = db_get_latest_telemetry_for_bed(bed_id) if bed_id else None
+        patient_alerts = db_list_alerts(facility_id, bed_id=bed_id or None, status='open', limit=5)
+        goals = db_list_goals(patient_id) if patient_id else []
+        active_goals = [g for g in goals if (g.get('status') or '').lower() in ('active', 'in_progress', 'pending')]
+        checkins = db_list_checkins(patient_id, limit=1) if patient_id else []
+        mood = checkins[0].get('mood') if checkins else None
+        care_focus = str(patient.get('care_focus') or 'Not documented').strip()
+        name = str(patient.get('name') or 'Unknown').strip()
+        age = patient.get('age') or 'N/A'
+        risk = patient.get('risk_level') or 'N/A'
+        condition = patient.get('primary_condition') or 'N/A'
+        facility_label = _chat_facility_label(facility_id)
+        header = (
+            f"{name} ({age}, {risk} risk, {condition}) - "
+            f"Bed {bed_id or 'Unassigned'}, {facility_label}"
+        ) if for_handoff else f"{name} - Bed {bed_id or 'Unassigned'}, {facility_label}"
+        lines = [
+            header,
+            f"- Care focus: {care_focus}",
+            f"- Open alerts: {len(patient_alerts)} | Active goals: {len(active_goals)} | Latest mood: {mood if mood is not None else 'n/a'}",
+        ]
+        if latest_telemetry:
+            hr = latest_telemetry.get('hr')
+            rr = latest_telemetry.get('rr')
+            presence = latest_telemetry.get('presence')
+            lines.append(
+                f"- Latest telemetry: HR {hr if hr is not None else 'n/a'} bpm, RR {rr if rr is not None else 'n/a'} /min, "
+                f"occupancy {'occupied' if presence is True else ('empty' if presence is False else 'unknown')}"
+            )
+        else:
+            lines.append("- Latest telemetry: unavailable")
+        if for_handoff:
+            handoff = []
+            if 'insulin' in care_focus.lower():
+                handoff.append('confirm insulin routine continuity')
+            if 'journal' in care_focus.lower():
+                handoff.append('continue journaling support')
+            if 'hydration' in care_focus.lower():
+                handoff.append('monitor hydration reminders')
+            if not handoff:
+                handoff.append('continue current care focus and monitor status changes')
+            lines.append(f"- Handoff note: {', '.join(handoff)}.")
+        return lines
+
+    text_l = (user_msg or '').strip().lower()
+    role = (session.get('role') or 'staff').strip()
+
+    allowed_beds = _allowed_bed_ids_for_user()
+    beds = db_list_beds_scoped(
+        facility_scope,
+        allowed_bed_ids=list(allowed_beds) if allowed_beds is not None else None,
+        include_inactive=False,
+    )
+    bed_summary = _serialize_beds_with_live_summary(beds) if beds else []
+    open_alerts = db_list_alerts(facility_scope, status='open', limit=25)
+    if allowed_beds is not None:
+        open_alerts = [a for a in open_alerts if str(a.get('bed_id') or '') in allowed_beds]
+    patients = _chat_list_scoped_patients(facility_scope)
+    high_risk_patients = [p for p in patients if str(p.get('risk_level') or '').lower() == 'high']
+    referenced_patients = _chat_resolve_referenced_patients(user_msg, facility_scope, scoped_patient)
+    devices = db_list_devices(facility_scope if role != 'super_admin' or facility_scope is not None else None)
+
+    total_beds = len(bed_summary)
+    occupied = sum(1 for b in bed_summary if b.get('occupied') is True)
+    now_ts = int(dt.now(timezone.utc).timestamp())
+    stale = sum(
+        1 for b in bed_summary
+        if b.get('last_seen_at') and now_ts - int(b.get('last_seen_at') or 0) > 300
+    )
+
+    if query_type == 'count_lookup':
+        entity, qualifier = _chat_parse_count_query(user_msg)
+
+        def _count_facilities_total() -> int:
+            try:
+                conn = get_conn()
+                row = conn.execute('SELECT COUNT(*) AS c FROM facilities').fetchone()
+                return int((row['c'] if row else 0) or 0)
+            except Exception:
+                return 0
+
+        if entity == 'facilities':
+            if qualifier == 'access':
+                if role == 'super_admin':
+                    count = _count_facilities_total()
+                    return f"You have access to {count} facilities across the network."
+                uf = _current_user_facility_id()
+                if uf is None:
+                    return "You currently do not have a facility assigned."
+                return f"You have access to 1 facility: {_chat_facility_label(uf)}."
+            total = _count_facilities_total()
+            if role == 'super_admin':
+                return f"There are {total} facilities available in the system."
+            # Respect scope for non-super-admin roles.
+            uf = _current_user_facility_id()
+            if uf is None:
+                return "There are 0 facilities available in your current scope."
+            return f"There is 1 facility available in your current scope: {_chat_facility_label(uf)}."
+
+        if entity == 'patients':
+            if qualifier == 'high_risk':
+                return f"There are {len(high_risk_patients)} high-risk patients in your current scope."
+            count = len(patients)
+            if qualifier == 'access':
+                return f"You have access to {count} patients in your current scope."
+            return f"There are {count} patients available in your current scope."
+
+        if entity == 'beds':
+            if qualifier == 'occupied':
+                return f"There are {occupied} occupied beds in your current scope."
+            if qualifier == 'empty':
+                return f"There are {max(0, total_beds - occupied)} empty beds in your current scope."
+            if qualifier == 'stale':
+                return f"There are {stale} beds with stale telemetry in your current scope."
+            if qualifier == 'access':
+                return f"You have access to {total_beds} beds in your current scope."
+            return f"There are {total_beds} beds available in your current scope."
+
+        if entity == 'devices':
+            count = len(devices)
+            if qualifier == 'access':
+                return f"You have access to {count} active devices in your current scope."
+            return f"There are {count} active devices available in your current scope."
+
+        if entity == 'alerts':
+            if qualifier in ('open', 'available', 'access'):
+                return f"There are {len(open_alerts)} open alerts in your current scope."
+            return f"There are {len(open_alerts)} alerts in your current scope."
+
+        if entity == 'staff':
+            if facility_scope is None and role == 'super_admin':
+                return "I can count staff contacts for a facility, but I need a facility context or selected patient first."
+            fid = facility_scope or _current_user_facility_id()
+            if fid is None:
+                return "No facility scope is available for staff count."
+            if qualifier == 'on_duty':
+                on_duty = _contacts_on_duty(int(fid))
+                return f"There are {len(on_duty)} staff contacts on duty in {_chat_facility_label(fid)}."
+            contacts = db_list_staff_contacts(int(fid), active_only=True)
+            if qualifier == 'access':
+                return f"You have access to {len(contacts)} staff contacts in {_chat_facility_label(fid)}."
+            return f"There are {len(contacts)} active staff contacts in {_chat_facility_label(fid)}."
+
+        if entity == 'shifts':
+            if facility_scope is None and role == 'super_admin':
+                return "I can count shifts for a facility, but I need a facility context or selected patient first."
+            fid = facility_scope or _current_user_facility_id()
+            if fid is None:
+                return "No facility scope is available for shift count."
+            shifts = db_list_shifts_v2(int(fid), active_only=True)
+            return f"There are {len(shifts)} active shifts configured in {_chat_facility_label(fid)}."
+
+        if entity == 'goals':
+            if not scoped_patient:
+                return "I can count goals for the selected patient. Select a patient or ask about a named patient."
+            pid = _coerce_int(scoped_patient.get('id'), low=1)
+            goals = db_list_goals(pid) if pid else []
+            active_goals = [g for g in goals if str(g.get('status') or '').lower() in ('active', 'in_progress', 'pending')]
+            if qualifier in ('available', 'access'):
+                return f"There are {len(goals)} goals for {scoped_patient.get('name') or 'the selected patient'}."
+            return f"There are {len(active_goals)} active goals for {scoped_patient.get('name') or 'the selected patient'}."
+
+        return "I can count facilities, patients, beds, devices, alerts, staff, shifts, or goals if you specify which one."
+
+    if query_type == 'about':
+        who = (session.get('display_name') or session.get('user') or 'current session')
+        return '\n'.join([
+            f"You are using the NeuroSense Patient Assistant as {who} ({role}).",
+            "- It helps with patient handoff summaries, high-risk triage, bed status, and open alerts.",
+            "- Use Quick Search & Actions or select a patient first for the most accurate handoff details.",
+        ])
+
+    if query_type == 'role_info':
+        return f"Your role is {role}."
+
+    if query_type == 'scope_info':
+        if role == 'super_admin':
+            try:
+                conn = get_conn()
+                row = conn.execute('SELECT COUNT(*) AS c FROM facilities').fetchone()
+                count = int((row['c'] if row and 'c' in row.keys() else 0) or 0)
+            except Exception:
+                count = len({int(p.get('facility_id')) for p in patients if _coerce_int(p.get('facility_id'), low=1) is not None})
+            return f"You have access to {count} facilities across the network."
+        user_facility = _current_user_facility_id()
+        if user_facility is None:
+            return "Your facility scope is not set."
+        return f"You have access to 1 facility: {_chat_facility_label(user_facility)}."
+
+    if query_type == 'patient_facility_lookup':
+        rows = referenced_patients
+        if not rows:
+            return "I can answer that, but I need a patient name (or select a patient first)."
+        ids = [pid for pid in (_coerce_int(p.get('id'), low=1) for p in rows) if pid is not None]
+        if ids:
+            _chat_state_set(last_patient_ids=[ids[0]], listed_patient_ids=ids if len(ids) > 1 else None)
+        lines = []
+        for patient in rows[:8]:
+            name = str(patient.get('name') or 'Unknown')
+            facility_label = _chat_facility_label(patient.get('facility_id'))
+            bed_id = str(patient.get('bed_id') or 'Unassigned')
+            lines.append(f"- {name}: {facility_label} (Bed {bed_id})")
+        return '\n'.join(lines)
+
+    if query_type == 'patient_detail_lookup':
+        rows = referenced_patients
+        if not rows:
+            return "I can provide patient details, but I need the patient selected or named in your message."
+        target = rows[0]
+        pid = _coerce_int(target.get('id'), low=1)
+        if pid is not None:
+            _chat_state_set(last_patient_ids=[pid])
+        return '\n'.join(_patient_detail_lines(target, for_handoff=False))
+
+    if query_type == 'patient_summary':
+        target = scoped_patient or (referenced_patients[0] if referenced_patients else None)
+        if not target:
+            return "Select a patient first, then ask for a handoff summary."
+        pid = _coerce_int(target.get('id'), low=1)
+        if pid is not None:
+            _chat_state_set(last_patient_ids=[pid])
+        return '\n'.join(_patient_detail_lines(target, for_handoff=True))
+
+    if query_type == 'risk_triage':
+        if not high_risk_patients:
+            return "There are no high-risk patients in your current scope."
+        listed_ids = [pid for pid in (_coerce_int(p.get('id'), low=1) for p in high_risk_patients[:6]) if pid is not None]
+        if listed_ids:
+            _chat_state_set(last_patient_ids=[listed_ids[0]], listed_patient_ids=listed_ids)
+        lines: List[str] = [f"There are {len(high_risk_patients)} high-risk patients in your current scope:"]
+        for patient in high_risk_patients[:6]:
+            bed_id = str(patient.get('bed_id') or 'Unassigned')
+            facility_label = _chat_facility_label(patient.get('facility_id'))
+            p_alerts = [a for a in open_alerts if str(a.get('bed_id') or '') == bed_id]
+            latest = db_get_latest_telemetry_for_bed(bed_id) if bed_id and bed_id != 'Unassigned' else None
+            reasons: List[str] = []
+            if patient.get('primary_condition'):
+                reasons.append(str(patient.get('primary_condition')))
+            care_focus = str(patient.get('care_focus') or '').strip()
+            if care_focus:
+                reasons.append(f"care focus: {care_focus}")
+            if p_alerts:
+                reasons.append(f"{len(p_alerts)} open alert(s)")
+            if latest and latest.get('last_seen_at') and (now_ts - int(latest.get('last_seen_at') or 0)) > 300:
+                reasons.append("telemetry stale")
+            lines.append(f"- {patient.get('name') or 'Unknown'} - {facility_label}, Bed {bed_id}; {', '.join(reasons) or 'high-risk status'}")
+        return '\n'.join(lines)
+
+    if query_type == 'bed_status':
+        lines = [
+            f"Bed status for your current scope: {occupied} of {total_beds} beds occupied.",
+            f"- Stale telemetry (>5 min): {stale}",
+            f"- Open alerts: {len(open_alerts)}",
+        ]
+        flagged = [b for b in bed_summary if b.get('last_seen_at') and now_ts - int(b.get('last_seen_at') or 0) > 300]
+        if flagged:
+            lines.append("- Beds needing review:")
+            for bed in flagged[:4]:
+                lines.append(f"- {bed.get('label') or _short_bed(bed.get('id'))}: stale telemetry")
+        return '\n'.join(lines)
+
+    if query_type == 'alerts':
+        if not open_alerts:
+            return "There are no open alerts in your current scope."
+        lines = [f"There are {len(open_alerts)} open alerts in your current scope."]
+        for alert in open_alerts[:6]:
+            lines.append(
+                f"- [{alert.get('severity') or 'info'}] {alert.get('type') or 'ALERT'} on bed "
+                f"{_short_bed(alert.get('bed_id'))} ({_fmt_elapsed(alert.get('ts'))})"
+            )
+        lines.append("- Suggested next steps: verify the bed, acknowledge the alert, and document any intervention.")
+        return '\n'.join(lines)
+
+    # General fallback keeps output short and useful.
+    if scoped_patient:
+        pid = _coerce_int(scoped_patient.get('id'), low=1)
+        if pid is not None:
+            _chat_state_set(last_patient_ids=[pid])
+    lines = [
+        f"Current scope snapshot: {len(patients)} patients, {len(high_risk_patients)} high-risk, {len(open_alerts)} open alerts.",
+        f"- Beds in scope: {total_beds} | Occupied: {occupied} | Stale telemetry: {stale}",
+    ]
+    if scoped_patient:
+        lines.append(f"- Selected patient: {scoped_patient.get('name') or 'Unknown'}")
+    lines.append("- Ask for a handoff summary, high-risk patients, bed status, or open alerts.")
+    return '\n'.join(lines)
+
+
 @app.route('/api/chat', methods=['POST'])
 def chat():
     if 'user' not in session:
         return jsonify(error="Unauthorized"), 401
-    if openai is None or not openai.api_key:
-        return jsonify(error="Chat service unavailable"), 503
 
-    data = request.get_json(force=True)
+    if _rate_limited(f"chat:{session.get('user') or request.remote_addr}", 40, 60):
+        return jsonify(error="rate limit exceeded"), 429
+
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(error="Invalid request payload"), 400
     user_msg = (data or {}).get("message", "").strip()
     if not user_msg:
         return jsonify(error="No message provided"), 400
+    query_type = _detect_chat_query_type(user_msg)
+
+    patient_id = _coerce_int(data.get('patient_id'), low=1)
+    requested_facility_id = _coerce_int(data.get('facility_id'), low=1)
+    scoped_patient: Optional[Dict[str, Any]] = None
+    if patient_id is not None:
+        scoped_patient = _chat_scoped_patient(patient_id)
+        if not scoped_patient:
+            return jsonify(error="Forbidden patient scope"), 403
+
+    facility_scope = _chat_resolve_facility_scope(requested_facility_id, scoped_patient)
+    if requested_facility_id is not None and facility_scope is None:
+        return jsonify(error="Forbidden facility scope"), 403
+    if scoped_patient is None:
+        named_hits = _chat_find_named_patients_in_scope(user_msg, facility_scope)
+        if len(named_hits) == 1:
+            scoped_patient = named_hits[0]
+            facility_scope = _chat_resolve_facility_scope(requested_facility_id, scoped_patient)
+    effective_patient_id = _coerce_int((scoped_patient or {}).get('id'), low=1) or patient_id
+    no_phi = _chat_no_phi_enabled()
+
+    force_local_query_types = {
+        'about',
+        'count_lookup',
+        'role_info',
+        'scope_info',
+        'patient_summary',
+        'patient_detail_lookup',
+        'patient_facility_lookup',
+        'risk_triage',
+        'bed_status',
+        'alerts',
+    }
+    use_local = _chat_local_only_enabled() or query_type in force_local_query_types
+
+    if use_local:
+        assistant_reply = _build_local_chat_reply(query_type, user_msg, scoped_patient, facility_scope)
+        assistant_reply = _normalize_chatbot_reply_text(assistant_reply)
+        _audit_event(
+            'chat_query_local',
+            str(effective_patient_id) if effective_patient_id is not None else None,
+            details=f"type={query_type}; facility={facility_scope}",
+        )
+        return jsonify(
+            reply=assistant_reply,
+            context={
+                'patient_id': effective_patient_id,
+                'facility_id': facility_scope,
+                'role': session.get('role'),
+                'user': session.get('display_name') or session.get('user'),
+                'query_type': query_type,
+                'provider': 'local',
+                'local_only': _chat_local_only_enabled(),
+                'no_phi': bool(no_phi),
+            },
+        )
+
+    if openai is None or not openai.api_key:
+        return jsonify(error="Chat service unavailable"), 503
+
+    context_parts: List[str] = []
+    if scoped_patient:
+        context_parts.append(_build_patient_chatbot_context(scoped_patient, no_phi=no_phi))
+    context_parts.append(_build_facility_chatbot_context(facility_scope, no_phi=no_phi))
+    context_text = '\n\n'.join(part for part in context_parts if part).strip() or "No context available."
+    context_text += f"\n\nRequest classification: {query_type}"
+    user_msg_for_model = _sanitize_user_message_for_openai(user_msg, scoped_patient) if no_phi else user_msg
 
     try:
         resp = openai.chat.completions.create(
-            model="gpt-4o-mini",
+            model=os.getenv('OPENAI_CHAT_MODEL', 'gpt-4o-mini'),
             messages=[
-                {"role": "system", "content": "You're a helpful assistant in a hospital dashboard."},
-                {"role": "user",   "content": user_msg}
-            ]
+                {"role": "system", "content": _build_chatbot_system_prompt(context_text, no_phi=no_phi)},
+                {"role": "user",   "content": user_msg_for_model}
+            ],
+            temperature=0.2,
+            max_tokens=500,
         )
-        # Access the reply correctly:
         assistant_reply = resp.choices[0].message.content
-        return jsonify(reply=assistant_reply)
+        if no_phi and _chat_reidentify_output_enabled():
+            pat_alias_map, bed_alias_map, fac_alias_map = _build_no_phi_alias_maps(facility_scope, scoped_patient)
+            assistant_reply = _restore_aliases_in_text(assistant_reply, pat_alias_map, bed_alias_map, fac_alias_map)
+        assistant_reply = _normalize_chatbot_reply_text(assistant_reply)
+        if scoped_patient:
+            pid_for_state = _coerce_int(scoped_patient.get('id'), low=1)
+            if pid_for_state is not None:
+                _chat_state_set(last_patient_ids=[pid_for_state])
+        _audit_event(
+            'chat_query',
+            str(effective_patient_id) if effective_patient_id is not None else None,
+            details=f"type={query_type}; facility={facility_scope}",
+        )
+        return jsonify(
+            reply=assistant_reply,
+            context={
+                'patient_id': effective_patient_id,
+                'facility_id': facility_scope,
+                'role': session.get('role'),
+                'user': session.get('display_name') or session.get('user'),
+                'query_type': query_type,
+                'provider': 'openai',
+                'local_only': False,
+                'no_phi': bool(no_phi),
+            },
+        )
     except Exception as e:
-        app.logger.error("OpenAI chat error", exc_info=e)
+        err_name = _chat_provider_error_name(e)
+        if err_name in ('APIConnectionError', 'ConnectError'):
+            app.logger.warning("OpenAI chat connection error (%s): %s", err_name, _chat_provider_debug_flags())
+            return jsonify(
+                error="Chat provider unreachable. Check internet/DNS, proxy, and OPENAI_BASE_URL configuration."
+            ), 503
+        if err_name in ('APITimeoutError', 'ReadTimeout', 'TimeoutException'):
+            app.logger.warning("OpenAI chat timeout (%s)", err_name)
+            return jsonify(error="Chat provider timed out. Please retry."), 504
+        if err_name in ('AuthenticationError', 'PermissionDeniedError'):
+            app.logger.warning("OpenAI chat auth error (%s)", err_name)
+            return jsonify(error="Chat provider authentication failed. Verify OPENAI_API_KEY."), 502
+        if err_name in ('RateLimitError',):
+            return jsonify(error="Chat provider rate limit reached. Try again shortly."), 429
+        if err_name in ('BadRequestError',):
+            return jsonify(error="Chat request rejected by provider."), 400
+        app.logger.error("OpenAI chat error (%s)", err_name, exc_info=e)
         return jsonify(error="Chat API error"), 500
 
 

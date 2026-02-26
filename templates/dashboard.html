@@ -104,8 +104,8 @@
           <span class="divider" aria-hidden="true"></span>
           <span id="heroScopeText">Calibrating access scope...</span>
         </div>
-        <h1>Care operations command center</h1>
-        <p>Track live sensor feeds, surface patient narratives, and coordinate the next best action together with your team.</p>
+        <h1>Care Operations Command Center</h1>
+        <p>This is your main monitoring workspace. Track live patient signals, review care context, and use Quick Search &amp; Actions to jump to a patient or task fast.</p>
         <div class="hero-actions">
           <div class="hero-select">
             <label class="visually-hidden" for="patientQuickSelect">Switch patient</label>
@@ -114,11 +114,15 @@
             </select>
           </div>
           <button type="button" class="btn btn-primary" id="openCommandPaletteBtn">
-            <i class="fas fa-magnifying-glass me-2"></i>Command palette
+            <i class="fas fa-magnifying-glass me-2"></i>Quick Search &amp; Actions
           </button>
           <button type="button" class="btn btn-outline-light" data-bs-toggle="modal" data-bs-target="#goalModal">
             <i class="fas fa-plus me-2"></i>New care goal
           </button>
+        </div>
+        <div class="hero-actions-help" role="note" aria-label="Quick Search and Actions help">
+          <i class="fas fa-bolt" aria-hidden="true"></i>
+          <span>Use <strong>Quick Search &amp; Actions</strong> to find a patient, open alerts, sync devices, or jump to common dashboard actions.</span>
         </div>
       </div>
       <div class="hero-stats">
@@ -145,7 +149,7 @@
       <div class="patient-hub-header d-flex flex-wrap justify-content-between align-items-start gap-3">
         <div>
           <div class="card-title mb-1">Patients</div>
-          <p class="text-muted small mb-0">Search, filter, and switch between patients assigned to you.</p>
+          <p class="text-muted small mb-0">Use this panel to find a patient quickly, then review their summary card and open detailed monitoring tools.</p>
         </div>
         <div class="patient-tools d-flex flex-wrap align-items-center justify-content-end gap-2 w-100 w-md-auto">
           <div class="patient-search position-relative flex-grow-1 flex-md-unset">
@@ -179,13 +183,13 @@
           </div>
         </aside>
         <section class="patient-current shadow-sm rounded-3" id="patientCurrentCard">
-          <div class="d-flex align-items-center gap-3 flex-wrap">
+          <div class="patient-current-top d-flex align-items-center gap-3 flex-wrap">
             <img id="patientAvatar" src="{{ url_for('static', filename='pic.jpg') }}"
               data-default-src="{{ url_for('static', filename='pic.jpg') }}" class="rounded-circle patient-avatar"
               alt="Patient avatar" />
             <div class="patient-current-info flex-grow-1">
               <h5 id="patientName" class="mb-1">Select a patient</h5>
-              <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+              <div class="patient-current-badges d-flex flex-wrap align-items-center gap-2 mb-2">
                 <span id="patientAgeBadge" class="badge bg-info text-white">Age: --</span>
                 <span id="patientIdBadge" class="badge bg-warning text-dark">ID: --</span>
                 <span id="patientRiskBadge" class="badge bg-secondary text-white">Risk: --</span>
@@ -245,7 +249,7 @@
       <div class="d-flex align-items-center justify-content-between mb-3">
         <div>
           <div class="card-title mb-1"><i class="fas fa-bed me-2"></i>Bed Monitoring</div>
-          <p class="text-muted small mb-0">Live occupancy, fall events, vital trends, and alert routing by on-duty staff.</p>
+          <p class="text-muted small mb-0">Live occupancy, vital trends, and alert routing by on-duty staff.</p>
         </div>
       </div>
       <div class="row g-3">
@@ -267,7 +271,6 @@
                 <div class="btn-group btn-group-sm" role="group" aria-label="Bed filters">
                   <button type="button" class="btn btn-outline-primary bed-filter-btn active" data-filter="all">All</button>
                   <button type="button" class="btn btn-outline-primary bed-filter-btn" data-filter="occupied">Occupied</button>
-                  <button type="button" class="btn btn-outline-primary bed-filter-btn" data-filter="fall">Fall</button>
                   <button type="button" class="btn btn-outline-primary bed-filter-btn" data-filter="stale">Stale</button>
                 </div>
                 <select id="bedsSortSelect" class="form-select form-select-sm bed-sort">
@@ -295,10 +298,9 @@
               <div id="bedDetailLastSeen" class="text-muted small">Last seen: --</div>
             </div>
             <div class="row g-2 mb-3">
-              <div class="col-md-3 col-6"><div class="bed-kpi"><span>Presence</span><strong id="bedKpiPresence">--</strong></div></div>
-              <div class="col-md-3 col-6"><div class="bed-kpi"><span>Fall</span><strong id="bedKpiFall">--</strong></div></div>
-              <div class="col-md-3 col-6"><div class="bed-kpi"><span>RR</span><strong id="bedKpiRr">--</strong></div></div>
-              <div class="col-md-3 col-6"><div class="bed-kpi"><span>HR</span><strong id="bedKpiHr">--</strong></div></div>
+              <div class="col-md-4 col-6"><div class="bed-kpi"><span>Presence</span><strong id="bedKpiPresence">--</strong></div></div>
+              <div class="col-md-4 col-6"><div class="bed-kpi"><span>RR</span><strong id="bedKpiRr">--</strong></div></div>
+              <div class="col-md-4 col-6"><div class="bed-kpi"><span>HR</span><strong id="bedKpiHr">--</strong></div></div>
             </div>
             <div class="row g-3">
               <div class="col-md-6">
@@ -315,7 +317,7 @@
               </div>
               <div class="col-12">
                 <div class="bed-chart-shell">
-                  <div class="bed-chart-title"><span>Presence + Fall</span><span class="text-muted small">Last 6h</span></div>
+                  <div class="bed-chart-title"><span>Occupancy Timeline</span><span class="text-muted small">Last 6h</span></div>
                   <div class="trend-chart"><canvas id="bedPresenceChart"></canvas></div>
                 </div>
               </div>
@@ -735,10 +737,10 @@
 
 <div id="commandPalette" class="command-palette" aria-hidden="true">
   <div class="command-palette-backdrop"></div>
-  <div class="command-palette-panel" role="dialog" aria-modal="true" aria-label="Command palette">
+    <div class="command-palette-panel" role="dialog" aria-modal="true" aria-label="Command palette">
     <div class="command-palette-input-wrap">
       <i class="fas fa-search"></i>
-      <input id="commandPaletteInput" type="text" class="form-control" placeholder="Jump to patient or action..."
+      <input id="commandPaletteInput" type="text" class="form-control" placeholder="Search patients, alerts, or actions..."
         autocomplete="off" aria-expanded="false" aria-controls="commandPaletteList" />
       <span class="command-palette-hint">ESC</span>
     </div>
@@ -870,7 +872,41 @@
   </div>
 </div>
 
+<!-- Patient Assistant Chatbot -->
+<div id="chatbotContainer" class="chatbot-container">
+  <button id="chatbotTrigger" class="chatbot-trigger" type="button" aria-label="Open patient assistant" aria-expanded="false">
+    <i class="fas fa-comments"></i>
+  </button>
+  <div id="chatbotWindow" class="chatbot-window d-none" role="dialog" aria-modal="false" aria-label="Patient assistant chat">
+    <div class="chatbot-header">
+      <div>
+        <h6 class="mb-0">Patient Assistant</h6>
+        <small id="chatbotContext" class="text-muted">Ready to help</small>
+      </div>
+      <div class="chatbot-header-actions">
+        <button id="chatbotClear" type="button" class="chatbot-clear-btn" aria-label="Clear chat">
+          <i class="fas fa-trash"></i>
+          <span>Clear</span>
+        </button>
+        <button id="chatbotClose" type="button" class="btn-close btn-close-sm" aria-label="Close assistant"></button>
+      </div>
+    </div>
+    <div id="chatbotMessages" class="chatbot-messages"></div>
+    <div id="chatbotQuickActions" class="chatbot-quick-actions"></div>
+    <div class="chatbot-input">
+      <input id="chatbotInput" type="text" maxlength="1000" placeholder="Ask about patient status, risks, or beds..." aria-label="Chat message">
+      <button id="chatbotSend" type="button" aria-label="Send message">
+        <i class="fas fa-paper-plane"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-container position-fixed top-0 end-0 p-3" id="toastContainer" aria-live="polite" aria-atomic="true"></div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script src="{{ url_for('static', filename='js/chatbot.js') }}"></script>
 {% endblock %}
 
 
