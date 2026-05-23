@@ -29,8 +29,20 @@
 #if USE_MMWAVE
 #include "Seeed_Arduino_mmWave.h"
 #include <HardwareSerial.h>
-static const int RADAR_RX = D7;
-static const int RADAR_TX = D6;
+// The Seeed XIAO ESP32-C6 board package defines D7/D6. The generic esp32c6
+// target does not, so fall back to the matching raw GPIOs.
+static const int RADAR_RX =
+#if defined(D7)
+    D7;
+#else
+    17;
+#endif
+static const int RADAR_TX =
+#if defined(D6)
+    D6;
+#else
+    16;
+#endif
 HardwareSerial mmwaveSerial(1);
 SEEED_MR60BHA2 mmWave;
 #endif
@@ -42,8 +54,8 @@ const char* API_KEY_VALUE = API_KEY;
 
 // These must match what you created in the NeuroSense Admin UI.
 const int FACILITY_ID = 1;
-const char* DEVICE_ID = "DEV-001";
-const char* BED_ID = "83ffc988-c21c-440e-9670-ee05cfc25791";
+const char* DEVICE_ID = "BHA2-001";
+const char* BED_ID = "a4045022-03c4-4675-8eb1-6e2ede4e19ac";
 
 static uint32_t lastPostMs = 0;
 static float lastRealRR = 14.0f;
