@@ -14,6 +14,7 @@ let goalsCache = [];
 let adminUiInitialized = false;
 let sidebarOpen = false;
 let csrfToken = null;
+const deviceKeyCache = new Map();
 let drawerFocusCleanup = null;
 let commandPaletteFocusCleanup = null;
 let drawerReturnFocus = null;
@@ -569,6 +570,29 @@ function normalizeForSearch(value){
   return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
+async function copyTextToClipboard(value, successMessage){
+  const text = String(value || '');
+  if(!text){
+    throw new Error('Nothing to copy');
+  }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    await navigator.clipboard.writeText(text);
+  }else{
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+  if(successMessage){
+    showToast({ title:'Copied', message: successMessage });
+  }
+}
+
 function isStaleLastSeen(epochSeconds){
   if(epochSeconds === null || epochSeconds === undefined) return true;
   const parsed = Number(epochSeconds);
@@ -590,6 +614,68 @@ function formatRelativeTime(value){
   if(hours < 24) return `${hours} hr${hours > 1 ? 's' : ''} ago`;
   const days = Math.round(hours / 24);
   return `${days} day${days > 1 ? 's' : ''} ago`;
+}
+
+function formatWallMetric(value, decimals = 0, suffix = ''){
+  if(value === null || value === undefined || value === '') return '--';
+  const parsed = Number(value);
+  if(Number.isNaN(parsed)) return '--';
+  return `${parsed.toFixed(decimals)}${suffix}`;
+}
+
+function formatWallMoodLabel(event){
+  if(!event || typeof event !== 'object') return '--';
+  const score = Number(event.mood_score);
+  const label = event.mood_label || moodNumberToLabel(score);
+  if(!label || label === 'Unknown'){
+    return '--';
+  }
+  return label;
+}
+
+function formatWallMoodSummary(event){
+  const label = formatWallMoodLabel(event);
+  if(label === '--'){
+    return '--';
+  }
+  const score = Number(event?.mood_score);
+  if(Number.isNaN(score) || score < 1){
+    return label;
+  }
+  return `${label} · ${score}/6`;
+}
+
+function wallMoodBadgeClass(score){
+  const parsed = Number(score);
+  if(Number.isNaN(parsed)) return 'bg-secondary-subtle text-secondary';
+  if(parsed >= 5) return 'bg-success-subtle text-success';
+  if(parsed >= 4) return 'bg-primary-subtle text-primary';
+  if(parsed >= 3) return 'bg-warning-subtle text-warning';
+  return 'bg-danger-subtle text-danger';
+}
+
+function airQualityBadgeClass(value){
+  const normalized = normalizeForSearch(value);
+  if(!normalized) return 'bg-secondary-subtle text-secondary';
+  if(['ok', 'good', 'safe', 'normal', 'clean'].some(token => normalized.includes(token))){
+    return 'bg-success-subtle text-success';
+  }
+  if(['moderate', 'fair', 'watch', 'warn'].some(token => normalized.includes(token))){
+    return 'bg-warning-subtle text-warning';
+  }
+  return 'bg-danger-subtle text-danger';
+}
+
+function formatWallMoodSummaryPlain(event){
+  const label = formatWallMoodLabel(event);
+  if(label === '--'){
+    return '--';
+  }
+  const score = Number(event?.mood_score);
+  if(Number.isNaN(score) || score < 1){
+    return label;
+  }
+  return `${label} | ${score}/6`;
 }
 
 function updateDonutFromSlices(slices){
@@ -1059,20 +1145,97 @@ async function loadDevices(){
   }
 }
 
+function createDeviceBadge(label, className=''){
+  const badge = document.createElement('span');
+  badge.className = `admin-device-badge ${className}`.trim();
+  badge.textContent = label;
+  return badge;
+}
+
+function describeDeviceKind(device){
+  const explicitType = String(device?.device_type || '').trim().toLowerCase();
+  const capabilities = Array.isArray(device?.capabilities) ? device.capabilities : [];
+  const caps = capabilities.map(cap => String(cap).trim().toLowerCase());
+  const firmware = String(device?.firmware || '').trim().toLowerCase();
+
+  if(explicitType === 'wall_unit' || caps.includes('mood') || caps.includes('environment')){
+    return { label: 'Wall Unit', className: 'device-kind-wall' };
+  }
+  if(firmware.includes('bha2') || (caps.includes('rr') && caps.includes('hr'))){
+    return { label: 'BHA2 Sensor', className: 'device-kind-bha2' };
+  }
+  if(caps.includes('presence') || caps.includes('fall')){
+    return { label: 'Bed Sensor', className: 'device-kind-sensor' };
+  }
+  return { label: 'Device', className: 'device-kind-generic' };
+}
+
 function renderDevices(items){
   const ul = document.getElementById('devicesList');
   if(!ul) return;
   ul.innerHTML = '';
   (items || []).forEach(device => {
     const li = document.createElement('li');
-    li.className = 'list-group-item d-flex justify-content-between align-items-center';
-    const text = document.createElement('span');
+    li.className = 'list-group-item d-flex justify-content-between align-items-center admin-device-item';
+    const text = document.createElement('div');
     text.className = 'admin-list-text';
-    const caps = Array.isArray(device?.capabilities) && device.capabilities.length ? device.capabilities.join(', ') : 'n/a';
-    text.textContent = `${device?.id || ''} | bed ${device?.bed_id || '--'} | fw ${device?.firmware || '--'} | caps ${caps}`;
+    const topLine = document.createElement('div');
+    topLine.className = 'admin-device-topline';
+
+    const name = document.createElement('div');
+    name.className = 'admin-device-id';
+    name.textContent = device?.id || '--';
+    topLine.appendChild(name);
+
+    const badgeRow = document.createElement('div');
+    badgeRow.className = 'admin-device-badges';
+    const kind = describeDeviceKind(device);
+    badgeRow.appendChild(createDeviceBadge(kind.label, kind.className));
+    badgeRow.appendChild(createDeviceBadge(device?.bed_id ? 'Assigned' : 'Unassigned', device?.bed_id ? 'device-status-assigned' : 'device-status-unassigned'));
+    topLine.appendChild(badgeRow);
+    text.appendChild(topLine);
+
+    const meta = document.createElement('div');
+    meta.className = 'admin-device-meta';
+    meta.textContent = `Bed ${device?.bed_id || '--'} · FW ${device?.firmware || '--'}`;
+    text.appendChild(meta);
+
+    const capsWrap = document.createElement('div');
+    capsWrap.className = 'admin-device-capabilities';
+    if(Array.isArray(device?.capabilities) && device.capabilities.length){
+      device.capabilities.forEach(capability => {
+        capsWrap.appendChild(createDeviceBadge(String(capability), 'device-capability-badge'));
+      });
+    }else{
+      capsWrap.appendChild(createDeviceBadge('No capabilities', 'device-capability-empty'));
+    }
+    text.appendChild(capsWrap);
+
     const actions = document.createElement('div');
     actions.className = 'admin-list-actions';
     if(device?.id){
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn btn-sm btn-outline-primary';
+      copyBtn.title = deviceKeyCache.has(String(device.id))
+        ? 'Copy latest revealed API key'
+        : 'Copy is available after create or rotate';
+      copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+      copyBtn.disabled = !deviceKeyCache.has(String(device.id));
+      copyBtn.addEventListener('click', async () => {
+        const key = deviceKeyCache.get(String(device.id));
+        if(!key){
+          showToast({ title:'No key available', message:'Create or rotate this device to reveal a new API key.', variant:'error' });
+          return;
+        }
+        try{
+          await copyTextToClipboard(key, `API key copied for ${device.id}.`);
+        }catch(e){
+          console.error('[dashboard] copy device key failed', e);
+          showToast({ title:'Copy failed', message:'Unable to copy the API key right now.', variant:'error' });
+        }
+      });
+      actions.appendChild(copyBtn);
+
       const rotateBtn = document.createElement('button');
       rotateBtn.className = 'btn btn-sm btn-outline-warning';
       rotateBtn.title = 'Rotate API key';
@@ -1097,6 +1260,21 @@ function renderDevices(items){
   });
 }
 
+function revealDeviceKey(deviceId, apiKey, contextLabel){
+  const panel = document.getElementById('deviceKeyPanel');
+  const valueEl = document.getElementById('deviceKeyValue');
+  const metaEl = document.getElementById('deviceKeyMeta');
+  if(deviceId && apiKey){
+    deviceKeyCache.set(String(deviceId), String(apiKey));
+  }
+  if(!panel || !valueEl || !metaEl || !apiKey){
+    return;
+  }
+  panel.classList.remove('d-none');
+  valueEl.value = String(apiKey);
+  metaEl.textContent = `${contextLabel || 'Device key ready'} for ${deviceId}. Copy this now. It cannot be viewed again later.`;
+}
+
 async function rotateDeviceKey(deviceId){
   if(!deviceId){
     return;
@@ -1108,7 +1286,8 @@ async function rotateDeviceKey(deviceId){
   try{
     const resp = await apiPost(`/api/admin/devices/${encodeURIComponent(deviceId)}/rotate_key`, {});
     if(resp?.api_key){
-      showToast({ title:'API key rotated', message:`${deviceId}: ${resp.api_key}` });
+      revealDeviceKey(deviceId, resp.api_key, 'API key rotated');
+      showToast({ title:'API key rotated', message:`A new API key is ready for ${deviceId}.` });
     }else{
       showToast({ title:'API key rotated', message:`${deviceId} key updated.` });
     }
@@ -1172,16 +1351,20 @@ async function addDevice(){
   const device_id = document.getElementById('deviceId')?.value.trim();
   const bed_id = document.getElementById('deviceBedId')?.value.trim();
   const firmware = document.getElementById('deviceFirmware')?.value.trim();
+  const device_type = document.getElementById('deviceType')?.value || 'telemetry';
   if(!device_id){
     showToast({ title:'Device ID required', message:'Enter a device identifier.', variant:'error' });
     return;
   }
   try{
-    const resp = await apiPost('/api/admin/devices', { device_id, bed_id, firmware, capabilities:['presence','fall'] });
+    const capabilities = device_type === 'wall_unit' ? ['mood','environment'] : ['presence','rr','hr'];
+    const resp = await apiPost('/api/admin/devices', { device_id, bed_id, firmware, device_type, capabilities });
     if(resp?.api_key){
-      showToast({ title:'Device created', message:`API key: ${resp.api_key}` });
+      revealDeviceKey(device_id, resp.api_key, 'Device created');
+      showToast({ title:'Device created', message:`A new API key is ready for ${device_id}.` });
     }
     ['deviceId','deviceBedId','deviceFirmware'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    const typeEl = document.getElementById('deviceType'); if(typeEl) typeEl.value = 'telemetry';
     loadDevices();
   }catch(e){
     console.error('[dashboard] addDevice failed', e);
@@ -1222,6 +1405,33 @@ function initFacilityUi(){
   if(clearDevicesBtn && !clearDevicesBtn.dataset.bound){
     clearDevicesBtn.dataset.bound = '1';
     clearDevicesBtn.addEventListener('click', clearAllDevices);
+  }
+  const copyDeviceKeyBtn = document.getElementById('copyDeviceKeyBtn');
+  if(copyDeviceKeyBtn && !copyDeviceKeyBtn.dataset.bound){
+    copyDeviceKeyBtn.dataset.bound = '1';
+    copyDeviceKeyBtn.addEventListener('click', async () => {
+      const value = document.getElementById('deviceKeyValue')?.value || '';
+      if(!value){
+        showToast({ title:'No key available', message:'Create or rotate a device to reveal an API key.', variant:'error' });
+        return;
+      }
+      try{
+        await copyTextToClipboard(value, 'Device API key copied to clipboard.');
+      }catch(err){
+        console.error('[dashboard] copyDeviceKeyBtn failed', err);
+        showToast({ title:'Copy failed', message:'Unable to copy the API key right now.', variant:'error' });
+      }
+    });
+  }
+  const dismissDeviceKeyBtn = document.getElementById('dismissDeviceKeyBtn');
+  if(dismissDeviceKeyBtn && !dismissDeviceKeyBtn.dataset.bound){
+    dismissDeviceKeyBtn.dataset.bound = '1';
+    dismissDeviceKeyBtn.addEventListener('click', () => {
+      const panel = document.getElementById('deviceKeyPanel');
+      if(panel){
+        panel.classList.add('d-none');
+      }
+    });
   }
   loadBeds(); loadStaff(); loadShifts(); loadDevices();
 }
@@ -3862,24 +4072,131 @@ function renderBedDuty(staff){
   });
 }
 
+function renderBedWallMood(events, latest){
+  const list = document.getElementById('bedWallMoodList');
+  const badge = document.getElementById('bedWallMoodBadge');
+  if(!list) return;
+  list.innerHTML = '';
+  const rows = Array.isArray(events) ? events.slice(0, 5) : [];
+  if(badge){
+    const label = formatWallMoodLabel(latest);
+    badge.textContent = label;
+    badge.className = `badge ${wallMoodBadgeClass(latest?.mood_score)}`;
+  }
+  if(!rows.length){
+    const li = document.createElement('li');
+    li.className = 'list-group-item text-muted bed-empty-item';
+    li.textContent = 'No wall mood check-ins yet';
+    list.appendChild(li);
+    return;
+  }
+  rows.forEach(item => {
+    const li = document.createElement('li');
+    li.className = 'list-group-item bed-wall-item';
+    const label = formatWallMoodLabel(item);
+    const score = item?.mood_score == null ? '--' : `${Number(item.mood_score)}/6`;
+    const relative = formatRelativeTime(item?.created_at) || '--';
+    const exact = formatDateTime(item?.created_at);
+    li.innerHTML = `
+      <div class="d-flex align-items-center justify-content-between gap-2">
+        <div class="d-flex flex-column">
+          <strong>${escapeHtml(label)}</strong>
+          <span class="text-muted small">Score ${escapeHtml(score)}</span>
+        </div>
+        <div class="text-end">
+          <div class="small text-muted">${escapeHtml(relative)}</div>
+          <div class="bed-wall-note">${escapeHtml(exact)}</div>
+        </div>
+      </div>
+    `;
+    list.appendChild(li);
+  });
+}
+
+function renderBedWallEnvironment(events, latest){
+  const list = document.getElementById('bedWallEnvironmentList');
+  const badge = document.getElementById('bedWallEnvironmentBadge');
+  if(!list) return;
+  list.innerHTML = '';
+  const rows = Array.isArray(events) ? events.slice(0, 4) : [];
+  if(badge){
+    const aq = latest?.air_quality || '--';
+    badge.textContent = aq;
+    badge.className = `badge ${airQualityBadgeClass(aq)}`;
+  }
+  if(!rows.length){
+    const li = document.createElement('li');
+    li.className = 'list-group-item text-muted bed-empty-item';
+    li.textContent = 'No room environment snapshots yet';
+    list.appendChild(li);
+    return;
+  }
+  rows.forEach(item => {
+    const li = document.createElement('li');
+    li.className = 'list-group-item bed-wall-item';
+    const relative = formatRelativeTime(item?.created_at) || '--';
+    const temp = formatWallMetric(item?.temperature_c, 1, ' C');
+    const humidity = formatWallMetric(item?.humidity, 0, '%');
+    const air = item?.air_quality || '--';
+    const light = formatWallMetric(item?.light_level, 0, ' lx');
+    const noise = formatWallMetric(item?.noise_level, 0, ' dB');
+    li.innerHTML = `
+      <div class="d-flex align-items-center justify-content-between gap-2">
+        <div class="d-flex flex-column">
+          <strong>${escapeHtml(`${temp} | ${humidity}`)}</strong>
+          <span class="text-muted small">Air ${escapeHtml(air)} | Light ${escapeHtml(light)} | Noise ${escapeHtml(noise)}</span>
+        </div>
+        <div class="text-end">
+          <div class="small text-muted">${escapeHtml(relative)}</div>
+          <div class="bed-wall-note">${escapeHtml(formatDateTime(item?.created_at))}</div>
+        </div>
+      </div>
+    `;
+    list.appendChild(li);
+  });
+}
+
 async function loadBedBundle(bedId){
   if(!bedId) return;
   try{
     const bundle = await apiGet('/api/bed_bundle', { bed_id: bedId });
     if(!bundle) return;
     const bed = bundle.bed || {};
+    const patient = bundle.patient || {};
+    const latestWallMood = bundle.latest_wall_mood || {};
+    const latestWallEnvironment = bundle.latest_wall_environment || {};
+    const moodEvents = Array.isArray(bundle.recent_wall_mood_events) ? bundle.recent_wall_mood_events : [];
+    const environmentEvents = Array.isArray(bundle.recent_wall_environment_events) ? bundle.recent_wall_environment_events : [];
+    const wallSeenAt = bed.last_wall_event_at || latestWallEnvironment.created_at || latestWallMood.created_at || null;
     setText('bedDetailTitle', bed.label || bed.name || bed.id || 'Bed');
-    setText('bedDetailMeta', [bed.room ? `Room ${bed.room}` : null, bed.patient ? `Patient: ${bed.patient}` : null].filter(Boolean).join(' | ') || 'No room/patient mapping');
-    setText('bedDetailLastSeen', `Last seen: ${formatEpochSeconds(bed.last_seen_at)}`);
+    setText(
+      'bedDetailMeta',
+      [
+        bed.room ? `Room ${bed.room}` : null,
+        patient?.name ? `Patient: ${patient.name}` : (bed.patient ? `Patient: ${bed.patient}` : null),
+        bed.id ? `ID ${bed.id}` : null,
+      ].filter(Boolean).join(' | ') || 'No room/patient mapping'
+    );
+    setText('bedDetailLastSeen', `Sensor last seen: ${formatEpochSeconds(bed.last_seen_at)}`);
+    setText('bedDetailWallSeen', `Wall unit: ${wallSeenAt ? `${formatDateTime(wallSeenAt)} · ${formatRelativeTime(wallSeenAt)}` : '--'}`);
     const latest = bundle.latest_telemetry || {};
     setText('bedKpiPresence', latest.presence === null || latest.presence === undefined ? '--' : (latest.presence ? 'Occupied' : 'Empty'));
     setText('bedKpiRr', latest.rr === null || latest.rr === undefined ? '--' : `${Number(latest.rr).toFixed(1)} /min`);
     setText('bedKpiHr', latest.hr === null || latest.hr === undefined ? '--' : `${Number(latest.hr).toFixed(1)} bpm`);
+    setText('bedKpiMood', formatWallMoodSummaryPlain(latestWallMood));
+    setText('bedKpiTemp', formatWallMetric(latestWallEnvironment.temperature_c, 1, ' C'));
+    setText('bedKpiAir', latestWallEnvironment.air_quality || '--');
+    setText('bedWallHumidity', formatWallMetric(latestWallEnvironment.humidity, 0, '%'));
+    setText('bedWallLight', formatWallMetric(latestWallEnvironment.light_level, 0, ' lx'));
+    setText('bedWallNoise', formatWallMetric(latestWallEnvironment.noise_level, 0, ' dB'));
+    setText('bedWallMoodCount', String(moodEvents.length));
     updateBedChart(bedCharts.rr, bundle?.trend?.rr || []);
     updateBedChart(bedCharts.hr, bundle?.trend?.hr || []);
     updateBedPresenceChart(bundle?.trend?.presence || []);
     renderBedAlerts(bundle.open_alerts || []);
     renderBedDuty(bundle.on_duty_staff || []);
+    renderBedWallMood(moodEvents, latestWallMood);
+    renderBedWallEnvironment(environmentEvents, latestWallEnvironment);
   }catch(err){
     console.error('[dashboard] loadBedBundle failed', err);
   }
@@ -3913,6 +4230,16 @@ function renderBedRoster(items){
     const stale = isStaleLastSeen(bed.last_seen_at);
     const rrText = bed.rr === null || bed.rr === undefined ? '--' : `${Number(bed.rr).toFixed(1)}`;
     const hrText = bed.hr === null || bed.hr === undefined ? '--' : `${Number(bed.hr).toFixed(0)}`;
+    const tempText = formatWallMetric(bed.latest_room_temperature, 1, ' C');
+    const moodText = bed.latest_mood_label || '--';
+    const airText = bed.latest_air_quality || '--';
+    const wallSignals = [];
+    if(bed.latest_mood_label){
+      wallSignals.push(`<span class="bed-roster-signal"><span>Mood</span><strong>${escapeHtml(moodText)}</strong></span>`);
+    }
+    if(bed.latest_air_quality){
+      wallSignals.push(`<span class="bed-roster-signal"><span>Air</span><strong>${escapeHtml(airText)}</strong></span>`);
+    }
     li.innerHTML = `
       <div class="bed-roster-item-inner">
         <div class="bed-roster-left">
@@ -3922,11 +4249,13 @@ function renderBedRoster(items){
             <span class="badge ${bed.occupied ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary'}">${occupied}</span>
             <span class="badge ${stale ? 'bg-warning-subtle text-warning' : 'bg-primary-subtle text-primary'}">${stale ? 'Stale' : 'Live'}</span>
           </div>
+          ${wallSignals.length ? `<div class="bed-roster-signal-row">${wallSignals.join('')}</div>` : ''}
         </div>
         <div class="bed-roster-right">
           <div class="bed-mini-metrics">
             <div class="metric"><span>RR</span><strong>${escapeHtml(rrText)}</strong></div>
             <div class="metric"><span>HR</span><strong>${escapeHtml(hrText)}</strong></div>
+            <div class="metric"><span>Temp</span><strong>${escapeHtml(tempText)}</strong></div>
           </div>
           <div class="bed-last-seen">${escapeHtml(lastSeenRel)}</div>
         </div>
@@ -3947,7 +4276,17 @@ function applyBedRosterFilters(){
   let filtered = rows;
   if(q){
     filtered = filtered.filter(bed => {
-      const hay = normalizeForSearch([bed.id, bed.label, bed.name, bed.room, bed.patient].filter(Boolean).join(' '));
+      const hay = normalizeForSearch([
+        bed.id,
+        bed.label,
+        bed.name,
+        bed.room,
+        bed.patient,
+        bed.latest_mood_label,
+        bed.latest_air_quality,
+        bed.latest_room_temperature,
+        bed.latest_humidity,
+      ].filter(Boolean).join(' '));
       return hay.includes(q);
     });
   }

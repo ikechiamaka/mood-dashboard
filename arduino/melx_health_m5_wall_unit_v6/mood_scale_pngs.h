@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
-// NeuroSense / La'i mood-scale embedded PNG variants v5.
+// MelX Health / La'i mood-scale embedded PNG variants v5.
 // Original: 2048x237
 // Resized: 1180x137
 //

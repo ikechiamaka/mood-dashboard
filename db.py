@@ -9,7 +9,7 @@ DEFAULT_DB_PATH = os.path.join(DEFAULT_DB_DIR, 'app.db')
 
 
 def _resolve_db_path() -> str:
-    override = os.getenv('NEUROSENSE_DB_PATH', '').strip()
+    override = os.getenv('MELX_HEALTH_DB_PATH', '').strip()
     if override:
         return override
     return DEFAULT_DB_PATH
@@ -284,6 +284,32 @@ def _ensure_bed_monitoring_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_telemetry_bed_ts_desc ON telemetry (bed_id, ts DESC);
         CREATE INDEX IF NOT EXISTS idx_telemetry_device_ts_desc ON telemetry (device_id, ts DESC);
+
+        CREATE TABLE IF NOT EXISTS wall_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            facility_id TEXT NOT NULL,
+            bed_id TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            patient_id INTEGER,
+            event_type TEXT NOT NULL,
+            mood_score INTEGER,
+            mood_label TEXT,
+            temperature_c REAL,
+            humidity REAL,
+            air_quality TEXT,
+            light_level REAL,
+            noise_level REAL,
+            source TEXT DEFAULT 'tab5_wall_unit',
+            raw_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (device_id) REFERENCES devices(id),
+            FOREIGN KEY (bed_id) REFERENCES beds(id),
+            FOREIGN KEY (patient_id) REFERENCES patients(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_wall_events_bed_created_at ON wall_events (bed_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_wall_events_facility_created_at ON wall_events (facility_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_wall_events_event_type_created_at ON wall_events (event_type, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_wall_events_device_created_at ON wall_events (device_id, created_at DESC);
 
         CREATE TABLE IF NOT EXISTS staff_contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1869,10 +1895,177 @@ def db_get_latest_telemetry_id() -> int:
     return int(row['max_id']) if row else 0
 
 
+def insert_wall_event(
+    *,
+    facility_id: str | int,
+    bed_id: str,
+    device_id: str,
+    patient_id: Optional[int],
+    event_type: str,
+    mood_score: Optional[int] = None,
+    mood_label: Optional[str] = None,
+    temperature_c: Optional[float] = None,
+    humidity: Optional[float] = None,
+    air_quality: Optional[str] = None,
+    light_level: Optional[float] = None,
+    noise_level: Optional[float] = None,
+    source: Optional[str] = 'tab5_wall_unit',
+    raw_json: Optional[Dict[str, Any] | List[Any] | str] = None,
+) -> Dict[str, Any]:
+    conn = get_conn()
+    raw_payload: Optional[str]
+    if raw_json is None:
+        raw_payload = None
+    elif isinstance(raw_json, str):
+        raw_payload = raw_json
+    else:
+        raw_payload = json.dumps(raw_json)
+    cur = conn.execute(
+        '''
+        INSERT INTO wall_events (
+            facility_id,
+            bed_id,
+            device_id,
+            patient_id,
+            event_type,
+            mood_score,
+            mood_label,
+            temperature_c,
+            humidity,
+            air_quality,
+            light_level,
+            noise_level,
+            source,
+            raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''',
+        (
+            str(facility_id),
+            bed_id,
+            device_id,
+            patient_id,
+            event_type,
+            mood_score,
+            mood_label,
+            temperature_c,
+            humidity,
+            air_quality,
+            light_level,
+            noise_level,
+            source or 'tab5_wall_unit',
+            raw_payload,
+        ),
+    )
+    conn.commit()
+    row = conn.execute('SELECT * FROM wall_events WHERE id = ?', (int(cur.lastrowid),)).fetchone()
+    return _row_to_dict(row, json_cols=('raw_json',)) if row else {}
+
+
+def get_latest_wall_event_for_bed(bed_id: str, event_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    params: List[Any] = [bed_id]
+    where = 'WHERE bed_id = ?'
+    if event_type:
+        where += ' AND event_type = ?'
+        params.append(event_type)
+    cur = conn.execute(
+        f'''
+        SELECT * FROM wall_events
+        {where}
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        ''',
+        tuple(params),
+    )
+    row = cur.fetchone()
+    return _row_to_dict(row, json_cols=('raw_json',)) if row else None
+
+
+def get_wall_events_for_bed(
+    bed_id: str,
+    event_type: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    params: List[Any] = [bed_id]
+    where = 'WHERE bed_id = ?'
+    if event_type:
+        where += ' AND event_type = ?'
+        params.append(event_type)
+    cur = conn.execute(
+        f'''
+        SELECT * FROM wall_events
+        {where}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        ''',
+        tuple(params + [max(1, int(limit or 100))]),
+    )
+    return [_row_to_dict(r, json_cols=('raw_json',)) for r in cur.fetchall()]
+
+
+def get_wall_environment_trend(bed_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    cur = conn.execute(
+        '''
+        SELECT * FROM (
+            SELECT *
+            FROM wall_events
+            WHERE bed_id = ? AND event_type = 'environment'
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+        ) recent
+        ORDER BY created_at ASC, id ASC
+        ''',
+        (bed_id, max(1, int(limit or 100))),
+    )
+    return [_row_to_dict(r, json_cols=('raw_json',)) for r in cur.fetchall()]
+
+
+def db_get_latest_wall_events_for_beds(
+    bed_ids: List[str],
+    *,
+    event_type: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    if not bed_ids:
+        return {}
+    conn = get_conn()
+    placeholders = ','.join('?' for _ in bed_ids)
+    params: List[Any] = list(bed_ids)
+    event_filter = ''
+    if event_type:
+        event_filter = ' AND event_type = ?'
+        params.append(event_type)
+    cur = conn.execute(
+        f'''
+        SELECT w.*
+        FROM wall_events w
+        INNER JOIN (
+            SELECT bed_id, MAX(created_at) AS max_created_at
+            FROM wall_events
+            WHERE bed_id IN ({placeholders}){event_filter}
+            GROUP BY bed_id
+        ) latest
+            ON latest.bed_id = w.bed_id AND latest.max_created_at = w.created_at
+        {'WHERE w.event_type = ?' if event_type else ''}
+        ORDER BY w.id DESC
+        ''',
+        tuple(params + ([event_type] if event_type else [])),
+    )
+    out: Dict[str, Dict[str, Any]] = {}
+    for row in cur.fetchall():
+        row_dict = _row_to_dict(row, json_cols=('raw_json',))
+        bed_key = str(row_dict.get('bed_id') or '')
+        if bed_key and bed_key not in out:
+            out[bed_key] = row_dict
+    return out
+
+
 def db_list_alerts(
     facility_id: Optional[int],
     *,
     bed_id: Optional[str] = None,
+    alert_type: Optional[str] = None,
     status: Optional[str] = None,
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
@@ -1885,6 +2078,9 @@ def db_list_alerts(
     if bed_id:
         clauses.append('a.bed_id = ?')
         params.append(bed_id)
+    if alert_type:
+        clauses.append('a.type = ?')
+        params.append(alert_type)
     if status:
         clauses.append('a.status = ?')
         params.append(status)

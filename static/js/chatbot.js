@@ -1,5 +1,5 @@
 (() => {
-  const STORAGE_KEY = 'neurosense.chatbot.history.v1';
+  const STORAGE_KEY = 'melx_health.chatbot.history.v1';
   const QUICK_ACTIONS = [
     { label: 'Summarize this patient', prompt: 'Summarize the currently selected patient for handoff.' },
     { label: 'Show high-risk patients', prompt: 'Show high-risk patients in my current scope and why they need attention.' },

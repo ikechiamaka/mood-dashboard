@@ -8,7 +8,7 @@ Flask-based dashboard that aggregates environmental sensor CSV data, user check-
 - Mood & stress check-ins (`/api/checkins`)
 - Journal entries (`/api/journal_entries`)
 - Weekly narrative insights (`/api/weekly_insights`)
-- OpenAI chat assistant (`/api/chat`)
+- Local privacy-first chat assistant (`/api/chat`) with optional Ollama refinement
 - RandomForest mood prediction (`/api/predict_mood`)
 
 ## Project Layout
@@ -31,10 +31,16 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Create a `.env` file (DO NOT commit secrets):
+Create a `.env` file:
 ```
 FLASK_SECRET_KEY=replace_this
-OPENAI_API_KEY=sk-...
+CHATBOT_LOCAL_ONLY=1
+CHATBOT_NO_PHI=1
+CHATBOT_PROVIDER=local
+# Optional local LLM (still local-only, no cloud):
+# CHATBOT_PROVIDER=ollama
+# OLLAMA_BASE_URL=http://127.0.0.1:11434
+# OLLAMA_MODEL=llama3.2:1b
 ```
 
 Run the app:
@@ -75,6 +81,27 @@ Returns: `{ "predicted_mood": 4 }`
 
 ## Testing (initial smoke examples forthcoming)
 Install dev deps (already in `requirements.txt`) then you can add PyTest tests under `tests/`.
+
+## DigitalOcean Deployment
+
+This app can run on DigitalOcean App Platform as a Python web service.
+
+Required environment variables:
+```
+FLASK_SECRET_KEY=use_a_long_random_secret
+CHATBOT_PROVIDER=local
+CHATBOT_LOCAL_ONLY=1
+CHATBOT_NO_PHI=1
+MELX_HEALTH_DB_PATH=/workspace/data/app.db
+DISABLE_ALERT_MONITOR=1
+```
+
+App Platform run command:
+```
+gunicorn --workers 1 --threads 4 --bind 0.0.0.0:$PORT wsgi:app
+```
+
+For production patient/device data, prefer a Droplet with a persistent disk or migrate the app from SQLite to Postgres. App Platform rebuilds/redeploys can replace the local filesystem, so SQLite on App Platform is best treated as a demo setup unless you attach persistent storage and keep the service to a single instance.
 
 ## Next Steps (Suggested)
 - Replace demo auth with real user model + hashed passwords

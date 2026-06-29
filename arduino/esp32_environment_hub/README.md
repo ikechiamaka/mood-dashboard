@@ -1,6 +1,6 @@
 # ESP32 Environment Hub
 
-This firmware track is for a normal ESP32 board acting as a room/environment hub for NeuroSense.
+This firmware track is for a normal ESP32 board acting as a room/environment hub for MelX Health.
 
 It posts environment snapshots to:
 
@@ -86,7 +86,7 @@ Example payload:
 
 ## Setup
 
-1. Create the device in NeuroSense admin.
+1. Create the device in MelX Health admin.
 2. Assign it to the correct facility and bed.
 3. Copy the revealed API key into `secrets.h`.
 4. Set the Flask server LAN IP in `SERVER_BASE_URL`.

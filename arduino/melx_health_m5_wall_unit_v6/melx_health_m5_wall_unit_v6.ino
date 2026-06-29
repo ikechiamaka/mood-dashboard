@@ -1,6 +1,6 @@
 
 /*
-  NeuroSense / La'i Tab5 Wall Unit v6
+  MelX Health / La'i Tab5 Wall Unit v6
   Target: M5Stack Tab5 (ESP32-P4)
 
   Features:
@@ -8,7 +8,7 @@
   - Correct grey selected-state for tapped emoji
   - Wi-Fi connection using Tab5 SDIO Wi-Fi pins
   - NTP time sync
-  - POST mood_checkin to NeuroSense backend:
+  - POST mood_checkin to MelX Health backend:
       POST /api/v1/wall/event
   - Bearer device API key auth
   - On-screen status: Offline / Online / Sending / Saved / Failed
@@ -18,7 +18,7 @@
   - M5GFX
 
   Files in this sketch folder:
-  - neurosense_m5_wall_unit_v6.ino
+  - melx_health_m5_wall_unit_v6.ino
   - mood_scale_pngs.h
   - secrets.h
 */
@@ -512,7 +512,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  Serial.println("BOOT: NeuroSense Tab5 wall unit v6");
+  Serial.println("BOOT: MelX Health Tab5 wall unit v6");
 
   auto cfg = M5.config();
   M5.begin(cfg);

@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Admin - NeuroSense{% endblock %}
+{% block title %}Admin - MelX Health{% endblock %}
 
 {% block content %}
 <!-- Sidebar -->
 <div class="sidebar">
   <div class="sidebar-brand">
-    <i class="fas fa-brain me-2"></i><span>NeuroSense</span>
+    <i class="fas fa-brain me-2"></i><span>MelX Health</span>
   </div>
   <ul class="sidebar-nav">
     <li class="sidebar-item"><a href="/dashboard" class="sidebar-link"><i class="fas fa-home"></i><span>Dashboard</span></a></li>
@@ -104,9 +104,34 @@
             <form class="row g-2 mb-3">
               <div class="col-md-3"><input id="deviceId" class="form-control form-control-sm" placeholder="DEV-001" /></div>
               <div class="col-md-3"><input id="deviceBedId" class="form-control form-control-sm" placeholder="Bed ID" /></div>
-              <div class="col-md-3"><input id="deviceFirmware" class="form-control form-control-sm" placeholder="Firmware" /></div>
-              <div class="col-md-3 text-end"><button id="addDeviceBtn" type="button" class="btn btn-sm btn-primary w-100">Add Device</button></div>
+              <div class="col-md-2">
+                <select id="deviceType" class="form-select form-select-sm">
+                  <option value="telemetry">Telemetry sensor</option>
+                  <option value="wall_unit">Wall unit</option>
+                </select>
+              </div>
+              <div class="col-md-2"><input id="deviceFirmware" class="form-control form-control-sm" placeholder="Firmware" /></div>
+              <div class="col-md-2 text-end"><button id="addDeviceBtn" type="button" class="btn btn-sm btn-primary w-100">Add Device</button></div>
             </form>
+            <div id="deviceKeyPanel" class="device-key-panel d-none" aria-live="polite">
+              <div class="device-key-panel-head">
+                <div>
+                  <div class="device-key-panel-title">Latest Device API Key</div>
+                  <div id="deviceKeyMeta" class="text-muted small">Copy this now. It cannot be viewed again later.</div>
+                </div>
+                <div class="device-key-panel-actions">
+                  <button id="copyDeviceKeyBtn" type="button" class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-copy me-2"></i>Copy Key
+                  </button>
+                  <button id="dismissDeviceKeyBtn" type="button" class="btn btn-sm btn-outline-secondary">
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+              <div class="device-key-input-wrap">
+                <input id="deviceKeyValue" class="form-control form-control-sm" readonly />
+              </div>
+            </div>
             <ul id="devicesList" class="list-group list-group-flush small"></ul>
           </div>
         </div>

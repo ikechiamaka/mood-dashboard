@@ -1,9 +1,9 @@
 /*
-  NeuroSense Dummy Bed Telemetry Sender (ESP32)
+  MelX Health Dummy Bed Telemetry Sender (ESP32)
 
   Purpose:
   - If the MR60 sensor is broken/unavailable, this sketch still sends realistic
-    dummy bed telemetry so the NeuroSense dashboard shows live data + charts.
+    dummy bed telemetry so the MelX Health dashboard shows live data + charts.
   - If you now have the MR60BHA2 (breath/heart) device, set USE_MMWAVE to 1
     and the sketch will send real RR/HR from the sensor.
 
@@ -12,7 +12,7 @@
 
   Requirements:
   - Fill in Wi-Fi + API URL + API key in `secrets.h`
-  - Device + bed must already exist in NeuroSense (Admin > Devices / Beds)
+  - Device + bed must already exist in MelX Health (Admin > Devices / Beds)
 */
 
 #include <Arduino.h>
@@ -52,7 +52,7 @@ const char* WIFI_PASS_VALUE = WIFI_PASS;
 const char* API_URL_VALUE = API_URL;
 const char* API_KEY_VALUE = API_KEY;
 
-// These must match what you created in the NeuroSense Admin UI.
+// These must match what you created in the MelX Health Admin UI.
 const int FACILITY_ID = 1;
 const char* DEVICE_ID = "BHA2-001";
 const char* BED_ID = "a4045022-03c4-4675-8eb1-6e2ede4e19ac";

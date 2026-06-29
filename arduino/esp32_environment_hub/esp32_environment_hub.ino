@@ -1,8 +1,8 @@
 /*
-  NeuroSense ESP32 Environment Hub
+  MelX Health ESP32 Environment Hub
 
   Purpose:
-  - Posts room/environment data into the existing NeuroSense wall-event pipeline.
+  - Posts room/environment data into the existing MelX Health wall-event pipeline.
   - Designed for a normal ESP32 dev board.
 
   Default mode:
@@ -334,7 +334,7 @@ static bool postEnvironment(const EnvironmentSnapshot& snapshot) {
 void setup() {
   Serial.begin(115200);
   delay(800);
-  Serial.println("BOOT: NeuroSense ESP32 Environment Hub");
+  Serial.println("BOOT: MelX Health ESP32 Environment Hub");
   Serial.printf("BASE_URL=%s\n", SERVER_BASE_URL_VALUE);
 
   pinMode(PIR_PIN, INPUT);

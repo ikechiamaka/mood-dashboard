@@ -5,7 +5,7 @@
 <!-- Sidebar -->
 <div class="sidebar" id="sidebarNav">
   <div class="sidebar-brand">
-    <i class="fas fa-brain me-2"></i><span>NeuroSense</span>
+    <i class="fas fa-brain me-2"></i><span>MelX Health</span>
   </div>
   <ul class="sidebar-nav">
     <li class="sidebar-item"><a href="#dashboardTop" class="sidebar-link active"><i
@@ -50,7 +50,7 @@
       <button class="btn btn-outline-primary d-lg-none navbar-icon-btn" type="button" id="sidebarToggle" aria-label="Toggle navigation" aria-controls="sidebarNav" aria-expanded="false">
         <i class="fas fa-bars"></i>
       </button>
-      <a class="navbar-brand" href="#"><i class="fas fa-brain me-2"></i><span>NeuroSense Dashboard</span></a>
+      <a class="navbar-brand" href="#"><i class="fas fa-brain me-2"></i><span>MelX Health Dashboard</span></a>
     </div>
     <div class="navbar-controls">
       <div class="navbar-controls-left">
@@ -249,7 +249,7 @@
       <div class="d-flex align-items-center justify-content-between mb-3">
         <div>
           <div class="card-title mb-1"><i class="fas fa-bed me-2"></i>Bed Monitoring</div>
-          <p class="text-muted small mb-0">Live occupancy, vital trends, and alert routing by on-duty staff.</p>
+          <p class="text-muted small mb-0">Live occupancy, vital trends, wall-unit check-ins, room environment, and alert routing by on-duty staff.</p>
         </div>
       </div>
       <div class="row g-3">
@@ -295,12 +295,36 @@
                 <h5 id="bedDetailTitle" class="mb-1">Select a bed</h5>
                 <p id="bedDetailMeta" class="text-muted small mb-0">Choose a bed to load telemetry and alerts.</p>
               </div>
-              <div id="bedDetailLastSeen" class="text-muted small">Last seen: --</div>
+              <div class="bed-detail-times text-end">
+                <div id="bedDetailLastSeen" class="text-muted small">Sensor last seen: --</div>
+                <div id="bedDetailWallSeen" class="text-muted small">Wall unit: --</div>
+              </div>
             </div>
             <div class="row g-2 mb-3">
-              <div class="col-md-4 col-6"><div class="bed-kpi"><span>Presence</span><strong id="bedKpiPresence">--</strong></div></div>
-              <div class="col-md-4 col-6"><div class="bed-kpi"><span>RR</span><strong id="bedKpiRr">--</strong></div></div>
-              <div class="col-md-4 col-6"><div class="bed-kpi"><span>HR</span><strong id="bedKpiHr">--</strong></div></div>
+              <div class="col-lg-2 col-md-4 col-6"><div class="bed-kpi"><span>Presence</span><strong id="bedKpiPresence">--</strong></div></div>
+              <div class="col-lg-2 col-md-4 col-6"><div class="bed-kpi"><span>RR</span><strong id="bedKpiRr">--</strong></div></div>
+              <div class="col-lg-2 col-md-4 col-6"><div class="bed-kpi"><span>HR</span><strong id="bedKpiHr">--</strong></div></div>
+              <div class="col-lg-2 col-md-4 col-6"><div class="bed-kpi"><span>Wall Mood</span><strong id="bedKpiMood">--</strong></div></div>
+              <div class="col-lg-2 col-md-4 col-6"><div class="bed-kpi"><span>Room Temp</span><strong id="bedKpiTemp">--</strong></div></div>
+              <div class="col-lg-2 col-md-4 col-6"><div class="bed-kpi"><span>Air Quality</span><strong id="bedKpiAir">--</strong></div></div>
+            </div>
+            <div class="bed-wall-strip mb-3">
+              <div class="bed-wall-chip">
+                <span>Humidity</span>
+                <strong id="bedWallHumidity">--</strong>
+              </div>
+              <div class="bed-wall-chip">
+                <span>Light</span>
+                <strong id="bedWallLight">--</strong>
+              </div>
+              <div class="bed-wall-chip">
+                <span>Noise</span>
+                <strong id="bedWallNoise">--</strong>
+              </div>
+              <div class="bed-wall-chip">
+                <span>Mood Entries</span>
+                <strong id="bedWallMoodCount">--</strong>
+              </div>
             </div>
             <div class="row g-3">
               <div class="col-md-6">
@@ -339,6 +363,26 @@
                     <span id="bedDutyCount" class="badge bg-primary-subtle text-primary">0</span>
                   </div>
                   <ul id="bedDutyList" class="list-group list-group-flush small"></ul>
+                </div>
+              </div>
+            </div>
+            <div class="row g-3 mt-1">
+              <div class="col-md-6">
+                <div class="bed-subpanel">
+                  <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h6 class="text-uppercase text-muted small mb-0">Recent Wall Mood</h6>
+                    <span id="bedWallMoodBadge" class="badge bg-secondary-subtle text-secondary">--</span>
+                  </div>
+                  <ul id="bedWallMoodList" class="list-group list-group-flush small"></ul>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="bed-subpanel">
+                  <div class="d-flex align-items-center justify-content-between mb-2">
+                    <h6 class="text-uppercase text-muted small mb-0">Room Environment</h6>
+                    <span id="bedWallEnvironmentBadge" class="badge bg-secondary-subtle text-secondary">--</span>
+                  </div>
+                  <ul id="bedWallEnvironmentList" class="list-group list-group-flush small"></ul>
                 </div>
               </div>
             </div>

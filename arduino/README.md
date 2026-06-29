@@ -1,11 +1,11 @@
-# NeuroSense Firmware Targets
+# MelX Health Firmware Targets
 
-This repository contains separate firmware tracks for separate pieces of NeuroSense hardware. There is not one universal firmware image for all boards.
+This repository contains separate firmware tracks for separate pieces of MelX Health hardware. There is not one universal firmware image for all boards.
 
 ## Current Targets
 
 ### 1. M5Stack Tab5 wall unit
-- Folder: `arduino/neurosense_m5_wall_unit_v6/`
+- Folder: `arduino/melx_health_m5_wall_unit_v6/`
 - Purpose: patient-facing mood UI
 - Endpoint: `POST /api/v1/wall/event`
 - Suggested device ID: `WALL-001`
@@ -38,7 +38,7 @@ That means one patient room/bed can have:
 - `ENV-001` for room conditions
 - `BHA2-001` for bed telemetry
 
-All three should point to the same facility and bed in the NeuroSense admin setup.
+All three should point to the same facility and bed in the MelX Health admin setup.
 
 ## Endpoint Mapping
 
@@ -48,7 +48,7 @@ All three should point to the same facility and bed in the NeuroSense admin setu
 
 ## Backend / Admin Setup
 
-Create the devices in the NeuroSense admin UI before flashing firmware.
+Create the devices in the MelX Health admin UI before flashing firmware.
 
 Suggested setup:
 

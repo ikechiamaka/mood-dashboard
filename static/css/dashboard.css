@@ -787,10 +787,18 @@ body::after {
     gap: 0.4rem;
 }
 
+.bed-detail-times {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
 .bed-mini-metrics {
     display: inline-flex;
     gap: 0.45rem;
     align-items: stretch;
+    flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 .bed-mini-metrics .metric {
@@ -849,6 +857,38 @@ body::after {
     font-weight: 600;
 }
 
+.bed-wall-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+
+.bed-wall-chip {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(255, 255, 255, 0.42);
+    border-radius: 14px;
+    padding: 0.6rem 0.7rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+}
+
+.dark-theme .bed-wall-chip {
+    background: rgba(8, 15, 29, 0.62);
+    border-color: rgba(51, 65, 85, 0.68);
+}
+
+.bed-wall-chip span {
+    font-size: 0.69rem;
+    text-transform: uppercase;
+    color: var(--muted-color);
+    letter-spacing: 0.04em;
+}
+
+.bed-wall-chip strong {
+    font-size: 0.94rem;
+}
+
 .bed-subpanel {
     border: 1px solid rgba(148, 163, 184, 0.16);
     background: rgba(255, 255, 255, 0.35);
@@ -862,7 +902,8 @@ body::after {
 }
 
 .bed-alert-item,
-.bed-duty-item {
+.bed-duty-item,
+.bed-wall-item {
     background: transparent;
     border: 1px solid rgba(148, 163, 184, 0.14);
     border-radius: 14px;
@@ -895,12 +936,61 @@ body::after {
     background: rgba(15, 23, 42, 0.42);
 }
 
+.dark-theme .bed-wall-item {
+    border-color: rgba(51, 65, 85, 0.62);
+    background: rgba(15, 23, 42, 0.42);
+}
+
 .dark-theme .bed-duty-item strong {
+    color: #f8fafc;
+}
+
+.dark-theme .bed-wall-item strong {
     color: #f8fafc;
 }
 
 .dark-theme .bed-duty-phone {
     color: #cbd5e1;
+}
+
+.bed-roster-signal-row {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    margin-top: 0.45rem;
+}
+
+.bed-roster-signal {
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 999px;
+    padding: 0.22rem 0.55rem;
+    font-size: 0.73rem;
+    color: var(--muted-color);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.dark-theme .bed-roster-signal {
+    background: rgba(8, 15, 29, 0.78);
+    border-color: rgba(51, 65, 85, 0.68);
+}
+
+.bed-roster-signal strong {
+    color: var(--text-color);
+    font-weight: 600;
+}
+
+.bed-wall-note {
+    font-size: 0.78rem;
+    color: var(--muted-color);
+}
+
+.dark-theme .bed-wall-item .text-muted,
+.dark-theme .bed-detail-times,
+.dark-theme .bed-wall-note {
+    color: #94a3b8 !important;
 }
 
 @media (max-width: 992px) {
@@ -926,6 +1016,10 @@ body::after {
 
     .bed-mini-metrics .metric {
         align-items: flex-start;
+    }
+
+    .bed-wall-strip {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
@@ -1827,7 +1921,7 @@ footer {
 }
 
 .app-footer .container-fluid::before {
-    content: "\00A9 2023 NeuroSense. All rights reserved.";
+    content: "\00A9 2023 MelX Health. All rights reserved.";
     color: var(--text-color);
     font-size: .875rem;
 }
@@ -3242,6 +3336,109 @@ body.command-palette-open {
     line-height: 1.4;
 }
 
+.admin-page .admin-device-item {
+    align-items: flex-start;
+}
+
+.admin-page .admin-device-topline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.35rem;
+}
+
+.admin-page .admin-device-id {
+    font-weight: 700;
+    color: var(--text-color);
+    letter-spacing: 0.01em;
+}
+
+.admin-page .admin-device-badges,
+.admin-page .admin-device-capabilities {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.admin-page .admin-device-meta {
+    color: var(--muted-color);
+    font-size: 0.83rem;
+    margin-bottom: 0.55rem;
+}
+
+.admin-page .admin-device-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.7rem;
+    padding: 0.22rem 0.62rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.admin-page .admin-device-badge.device-kind-wall {
+    background: rgba(14, 165, 233, 0.12);
+    border-color: rgba(14, 165, 233, 0.28);
+    color: #0369a1;
+}
+
+.admin-page .admin-device-badge.device-kind-bha2 {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.28);
+    color: #047857;
+}
+
+.admin-page .admin-device-badge.device-kind-sensor {
+    background: rgba(99, 102, 241, 0.12);
+    border-color: rgba(99, 102, 241, 0.24);
+    color: #4338ca;
+}
+
+.admin-page .admin-device-badge.device-kind-generic {
+    background: rgba(148, 163, 184, 0.14);
+    border-color: rgba(148, 163, 184, 0.28);
+    color: #475569;
+}
+
+.admin-page .admin-device-badge.device-status-assigned {
+    background: rgba(15, 118, 110, 0.12);
+    border-color: rgba(15, 118, 110, 0.24);
+    color: #0f766e;
+}
+
+.admin-page .admin-device-badge.device-status-unassigned {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.22);
+    color: #b45309;
+}
+
+.admin-page .admin-device-badge.device-capability-badge {
+    background: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.15);
+    color: var(--primary);
+    text-transform: none;
+    letter-spacing: 0.01em;
+    font-weight: 600;
+}
+
+.admin-page .admin-device-badge.device-capability-empty {
+    background: rgba(148, 163, 184, 0.12);
+    border-color: rgba(148, 163, 184, 0.2);
+    color: var(--muted-color);
+    text-transform: none;
+    letter-spacing: 0.01em;
+    font-weight: 600;
+}
+
 .admin-page .admin-list-actions {
     display: inline-flex;
     align-items: center;
@@ -3255,6 +3452,40 @@ body.command-palette-open {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+}
+
+.admin-page .device-key-panel {
+    border: 1px solid rgba(37, 99, 235, 0.18);
+    background: rgba(37, 99, 235, 0.06);
+    border-radius: 16px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.admin-page .device-key-panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.9rem;
+    margin-bottom: 0.75rem;
+}
+
+.admin-page .device-key-panel-title {
+    font-weight: 700;
+    color: var(--text-color);
+}
+
+.admin-page .device-key-panel-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.admin-page .device-key-input-wrap input {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.92rem;
+    letter-spacing: 0.01em;
 }
 
 .admin-page .list-group-item:hover {
@@ -3287,6 +3518,53 @@ body.command-palette-open {
 .dark-theme .admin-page .admin-section-badge {
     color: #93c5fd;
     border-color: rgba(56, 189, 248, 0.35);
+}
+
+.dark-theme .admin-page .device-key-panel {
+    background: rgba(37, 99, 235, 0.12);
+    border-color: rgba(96, 165, 250, 0.3);
+}
+
+.dark-theme .admin-page .admin-device-badge.device-kind-wall {
+    background: rgba(14, 165, 233, 0.18);
+    border-color: rgba(56, 189, 248, 0.34);
+    color: #dbeafe;
+}
+
+.dark-theme .admin-page .admin-device-badge.device-kind-bha2 {
+    background: rgba(16, 185, 129, 0.18);
+    border-color: rgba(52, 211, 153, 0.34);
+    color: #dcfce7;
+}
+
+.dark-theme .admin-page .admin-device-badge.device-kind-sensor {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(129, 140, 248, 0.34);
+    color: #e0e7ff;
+}
+
+.dark-theme .admin-page .admin-device-badge.device-kind-generic {
+    background: rgba(148, 163, 184, 0.18);
+    border-color: rgba(148, 163, 184, 0.3);
+    color: #e2e8f0;
+}
+
+.dark-theme .admin-page .admin-device-badge.device-status-assigned {
+    background: rgba(20, 184, 166, 0.18);
+    border-color: rgba(45, 212, 191, 0.34);
+    color: #ccfbf1;
+}
+
+.dark-theme .admin-page .admin-device-badge.device-status-unassigned {
+    background: rgba(245, 158, 11, 0.18);
+    border-color: rgba(251, 191, 36, 0.34);
+    color: #fef3c7;
+}
+
+.dark-theme .admin-page .admin-device-badge.device-capability-badge {
+    background: rgba(37, 99, 235, 0.18);
+    border-color: rgba(96, 165, 250, 0.24);
+    color: #dbeafe;
 }
 
 /* Chatbot */
