@@ -25,6 +25,12 @@ let bedRosterFilter = 'all';
 let bedRosterSort = 'last_seen';
 const bedCharts = { rr:null, hr:null, presence:null };
 
+const operationsSnapshot = {
+  beds: [],
+  devices: [],
+  alerts: []
+};
+
 function trapFocus(container){
   if(!container){
     return () => {};
@@ -169,6 +175,39 @@ function updateUIForCurrentRole(){
     window.chatbot.updateUserContext(currentUser.userName || null, currentUser.name || null);
   }
   filterDataBasedOnRole();
+}
+
+function updateOperationsSnapshot(){
+  const patients = Array.isArray(patientsCache) ? patientsCache : [];
+  const beds = Array.isArray(operationsSnapshot.beds) ? operationsSnapshot.beds : [];
+  const devices = Array.isArray(operationsSnapshot.devices) ? operationsSnapshot.devices : [];
+  const alerts = Array.isArray(operationsSnapshot.alerts) ? operationsSnapshot.alerts : [];
+  const highRisk = patients.filter(patient => String(patient?.risk_level || '').toLowerCase() === 'high').length;
+  const liveBeds = beds.filter(bed => bed?.last_seen_at && !isStaleLastSeen(bed.last_seen_at)).length;
+  setText('opsPatientCount', String(patients.length));
+  setText('opsHighRiskCount', String(highRisk));
+  setText('opsLiveBedsCount', beds.length ? `${liveBeds}/${beds.length}` : '0');
+  setText('opsOpenAlertsCount', String(alerts.length));
+  setText('opsDeviceCount', String(devices.length));
+}
+
+async function refreshOperationsSnapshot(){
+  const requests = [
+    apiGet('/api/beds').catch(() => null),
+    apiGet('/api/alerts', { status: 'open', limit: 500 }).catch(() => null),
+    apiGet('/api/admin/devices').catch(() => null),
+  ];
+  const [beds, alerts, devices] = await Promise.all(requests);
+  if(Array.isArray(beds)){
+    operationsSnapshot.beds = beds;
+  }
+  if(Array.isArray(alerts)){
+    operationsSnapshot.alerts = alerts;
+  }
+  if(Array.isArray(devices)){
+    operationsSnapshot.devices = devices;
+  }
+  updateOperationsSnapshot();
 }
 function filterDataBasedOnRole(){
   let dataStatus = '';
@@ -967,6 +1006,10 @@ function renderStaff(items){
 async function loadBeds(){
   try{
     const items = await apiGet('/api/beds');
+    if(Array.isArray(items)){
+      operationsSnapshot.beds = items;
+      updateOperationsSnapshot();
+    }
     renderBeds(items);
   }catch(e){ console.error('[dashboard] loadBeds failed', e); }
 }
@@ -1139,6 +1182,10 @@ async function addShift(){
 async function loadDevices(){
   try{
     const list = await apiGet('/api/admin/devices');
+    if(Array.isArray(list)){
+      operationsSnapshot.devices = list;
+      updateOperationsSnapshot();
+    }
     renderDevices(list);
   }catch(e){
     console.error('[dashboard] loadDevices failed', e);
@@ -2209,6 +2256,7 @@ async function initPatientSelector(){
   bindGroupModeControl();
 
   const selectionChanged = filterPatients({ initial: true });
+  updateOperationsSnapshot();
   renderPatientList({ resetScroll: true, force: true });
 
   if(!patientsCache.length){
@@ -4322,6 +4370,8 @@ async function loadBedRoster(){
   try{
     const beds = await apiGet('/api/beds');
     bedRosterCache = Array.isArray(beds) ? beds : [];
+    operationsSnapshot.beds = bedRosterCache;
+    updateOperationsSnapshot();
     applyBedRosterFilters();
   }catch(err){
     console.error('[dashboard] loadBedRoster failed', err);
@@ -4405,6 +4455,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initBedMonitoring();
     initFacilityUi();
     initAdminUi();
+    refreshOperationsSnapshot();
     updatePatientEmptyStates();
   }).catch(err => {
     console.error('[dashboard] initUser promise rejected', err);
@@ -4412,6 +4463,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initChatbot();
     initBedMonitoring();
     initFacilityUi();
+    refreshOperationsSnapshot();
     updatePatientEmptyStates();
   });
   setInterval(() => {
@@ -4428,6 +4480,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     loadBedRoster();
+    refreshOperationsSnapshot();
     if(selectedBedId){
       loadBedBundle(selectedBedId);
     }
