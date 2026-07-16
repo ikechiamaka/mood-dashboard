@@ -549,7 +549,19 @@ async function apiPatch(path, payload, params){
   const url = params ? withQuery(path, params) : path;
   const r = await fetch(url, { method:'PATCH', headers: withCsrf({ 'Content-Type':'application/json' }), credentials:'same-origin', body: JSON.stringify(payload) });
   if(r.status === 401){ window.location.href = '/login'; return null; }
-  if(!r.ok) throw new Error(`PATCH ${path} failed: ${r.status}`);
+  if(!r.ok){
+    let detail = '';
+    try{
+      const data = await r.json();
+      if(data && typeof data === 'object'){
+        detail = data.error ? String(data.error) : JSON.stringify(data);
+      }
+    }catch(_){
+      detail = '';
+    }
+    const msg = detail ? `${r.status} (${detail})` : String(r.status);
+    throw new Error(`PATCH ${path} failed: ${msg}`);
+  }
   return r.json();
 }
 
@@ -1712,7 +1724,14 @@ function renderUsers(items){
       left.appendChild(document.createTextNode(`${roleText}${facilityText}`));
     }
     const right = document.createElement('div');
+    right.className = 'admin-list-actions';
+    const reset = document.createElement('button');
+    reset.className = 'btn btn-sm btn-outline-secondary';
+    reset.innerHTML = '<i class="fas fa-key me-1"></i>Reset';
+    reset.title = 'Reset password';
+    reset.onclick = async () => resetUserPassword(u.email);
     const del = document.createElement('button'); del.className='btn btn-sm btn-outline-danger'; del.textContent='Delete'; del.onclick=async ()=>{ if(confirm('Delete user?')){ await apiDeleteUser(u.email); loadUsers(); } };
+    right.appendChild(reset);
     right.appendChild(del);
     li.appendChild(left); li.appendChild(right); ul.appendChild(li);
   });
@@ -1735,6 +1754,27 @@ async function apiDeleteUser(email){
   const r = await fetch(`/api/users/${encodeURIComponent(email)}`, { method:'DELETE', headers: withCsrf(), credentials:'same-origin' });
   if(r.status === 401){ window.location.href='/login'; return; }
   if(!r.ok){ console.error('DELETE /api/users failed'); }
+}
+
+async function resetUserPassword(email){
+  if(!email){
+    return;
+  }
+  const newPassword = prompt(`Enter a new password for ${email}. Minimum 8 characters.`);
+  if(newPassword === null){
+    return;
+  }
+  if(newPassword.length < 8){
+    showToast({ title:'Password too short', message:'Use at least 8 characters.', variant:'error' });
+    return;
+  }
+  try{
+    await apiPatch(`/api/users/${encodeURIComponent(email)}`, { password: newPassword });
+    showToast({ title:'Password reset', message:`Password updated for ${email}.` });
+  }catch(err){
+    console.error('[dashboard] reset password failed', err);
+    showToast({ title:'Reset failed', message: err.message || 'Unable to reset password.', variant:'error' });
+  }
 }
 function initAdminUi(){
   if(!currentUser || (currentUser.id !== 'super_admin' && currentUser.id !== 'facility_admin')){
@@ -3771,6 +3811,51 @@ function initProfileModal() {
     }
   });
 }
+
+function initSettingsModal(){
+  const form = document.getElementById('changePasswordForm');
+  if(!form || form.dataset.bound){
+    return;
+  }
+  form.dataset.bound = '1';
+  form.addEventListener('submit', async (evt) => {
+    evt.preventDefault();
+    const currentPassword = document.getElementById('currentPassword')?.value || '';
+    const newPassword = document.getElementById('newPassword')?.value || '';
+    const confirmPassword = document.getElementById('confirmNewPassword')?.value || '';
+    if(newPassword.length < 8){
+      showToast({ title:'Password too short', message:'Use at least 8 characters.', variant:'error' });
+      return;
+    }
+    if(newPassword !== confirmPassword){
+      showToast({ title:'Passwords do not match', message:'Confirm the new password and try again.', variant:'error' });
+      return;
+    }
+    const button = document.getElementById('changePasswordBtn');
+    const original = button ? button.innerHTML : '';
+    if(button){
+      button.disabled = true;
+      button.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Updating...';
+    }
+    try{
+      await apiPost('/api/me/password', {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      form.reset();
+      showToast({ title:'Password updated', message:'Use the new password the next time you sign in.' });
+    }catch(err){
+      console.error('[dashboard] change password failed', err);
+      showToast({ title:'Update failed', message: err.message || 'Unable to change password.', variant:'error' });
+    }finally{
+      if(button){
+        button.disabled = false;
+        button.innerHTML = original;
+      }
+    }
+  });
+}
+
 function initButtons(){
   const syncBtn = document.getElementById('syncWearable');
   if(syncBtn && !syncBtn.dataset.bound){
@@ -4448,6 +4533,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initSidebarToggle();
   initCommandPalette();
   initProfileModal();
+  initSettingsModal();
   initPatientDrawer();
   initUser().then(() => {
     initPatientSelector();

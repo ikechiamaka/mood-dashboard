@@ -1993,6 +1993,24 @@ def me():
     })
 
 
+@app.route('/api/me/password', methods=['POST'])
+def me_password():
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    data = request.get_json(force=True) or {}
+    current_password = str(data.get('current_password') or '')
+    new_password = str(data.get('new_password') or '')
+    if len(new_password) < 8:
+        return jsonify({'error': 'new password must be at least 8 characters'}), 400
+    email = session.get('user')
+    user_obj = get_user_by_email(email) if email else None
+    if not user_obj or not user_obj.verify_password(current_password):
+        return jsonify({'error': 'current password is incorrect'}), 400
+    db_update_user(email, {'password_hash': generate_password_hash(new_password)})
+    _audit_event('change_own_password', email)
+    return jsonify({'status': 'ok'})
+
+
 def _patient_access_ok(pid: int) -> bool:
     role = session.get('role')
     if role == 'super_admin':

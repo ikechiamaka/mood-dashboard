@@ -16,6 +16,7 @@ def app_db(tmp_path, monkeypatch):
     monkeypatch.setenv("CHATBOT_PROVIDER", "local")
     monkeypatch.setenv("CHATBOT_NO_PHI", "1")
 
+    sys.modules.pop("users", None)
     sys.modules.pop("db", None)
     sys.modules.pop("app", None)
 
