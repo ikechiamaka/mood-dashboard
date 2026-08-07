@@ -46,6 +46,7 @@ data/checkins.csv
 # Images generated during analysis
 *.png
 *.svg
+!static/melx-splash-background.png
 
 # Arduino secrets
 arduino/**/secrets.h

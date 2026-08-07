@@ -1833,7 +1833,20 @@ def _request_data_as_dict() -> Dict[str, Any]:
 
 @app.route('/')
 def home():
-    return redirect(url_for('login'))
+    # Keep the clinical portal available on its own hostname while the primary
+    # domain remains a deliberately minimal public site.
+    dashboard_hosts = {
+        host.strip().lower()
+        for host in os.getenv(
+            'DASHBOARD_HOSTNAMES',
+            'dashboard.melxhealth.com',
+        ).split(',')
+        if host.strip()
+    }
+    host = request.host.split(':', 1)[0].lower()
+    if host in dashboard_hosts:
+        return redirect(url_for('login'))
+    return render_template('splash.html')
 
 
 @app.route('/support/request-access', methods=['POST'])

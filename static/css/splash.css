@@ -1,0 +1,106 @@
+:root {
+  color-scheme: dark;
+  font-family: "DM Sans", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; }
+
+.splash {
+  align-items: center;
+  background: #101a1b;
+  color: #f7f7f2;
+  display: flex;
+  isolation: isolate;
+  justify-content: center;
+  min-height: 100svh;
+  overflow: hidden;
+  padding: 32px 24px;
+  position: relative;
+  text-align: center;
+}
+
+.splash__image,
+.splash__shade {
+  inset: 0;
+  position: absolute;
+  z-index: -2;
+}
+
+.splash__image {
+  background: url("../melx-splash-background.png") center / cover no-repeat;
+}
+
+.splash__shade {
+  background: rgba(8, 17, 18, 0.56);
+  z-index: -1;
+}
+
+.brand {
+  font-size: 14px;
+  font-weight: 600;
+  left: 50%;
+  letter-spacing: 2px;
+  position: absolute;
+  text-transform: uppercase;
+  top: 32px;
+  transform: translateX(-50%);
+}
+
+.content { max-width: 520px; }
+
+.eyebrow {
+  font-size: 13px;
+  letter-spacing: 1.3px;
+  margin: 0 0 20px;
+  text-transform: uppercase;
+}
+
+h1 {
+  font-family: "Playfair Display", Georgia, serif;
+  font-size: clamp(44px, 6vw, 74px);
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.05;
+  margin: 0;
+}
+
+.intro {
+  font-size: 17px;
+  line-height: 1.6;
+  margin: 22px auto 30px;
+  max-width: 380px;
+}
+
+.contact-link {
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  color: inherit;
+  display: inline-block;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 13px 26px;
+  text-decoration: none;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.contact-link:hover,
+.contact-link:focus-visible {
+  background: #f7f7f2;
+  color: #101a1b;
+}
+
+footer {
+  bottom: 24px;
+  color: rgba(247, 247, 242, 0.78);
+  font-size: 12px;
+  left: 0;
+  position: absolute;
+  right: 0;
+}
+
+@media (max-width: 520px) {
+  .splash { padding-inline: 20px; }
+  .brand { top: 24px; }
+  .intro { font-size: 16px; }
+}
