@@ -27,6 +27,8 @@
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include "tls_ca.h"
 #include <time.h>
 
 #include "mood_scale_pngs.h"
@@ -445,10 +447,16 @@ bool postMoodCheckin(const MoodZone& z) {
   Serial.println("POST " + url);
   Serial.println(payload);
 
+  if (time(nullptr) < 1700000000) {
+    setPostStatus("Waiting for time sync");
+    return false;
+  }
+  WiFiClientSecure secureClient;
+  secureClient.setCACert(MELX_ROOT_CA);
   HTTPClient http;
   http.setTimeout(8000);
 
-  if (!http.begin(url)) {
+  if (!url.startsWith("https://") || !http.begin(secureClient, url)) {
     lastServerResponse = "HTTP begin failed";
     setPostStatus("Failed: HTTP setup");
     return false;

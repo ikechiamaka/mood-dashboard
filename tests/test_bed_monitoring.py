@@ -139,7 +139,7 @@ def test_wall_mood_checkin_stores_event(app_db):
         assert body['ok'] is True
         assert body['mood_score'] == 4
         assert body['mood_label'] == 'Good'
-        row = conn.execute(
+        row = db_module.get_conn().execute(
             'SELECT * FROM wall_events WHERE device_id = ? ORDER BY id DESC LIMIT 1',
             (device_id,),
         ).fetchone()
@@ -387,7 +387,7 @@ def test_alert_monitor_creates_and_resolves_stale_telemetry_alert(app_db, monkey
         assert fresh_ingest.status_code == 200
 
     flask_app._alert_monitor_cycle()
-    refreshed = conn.execute(
+    refreshed = db_module.get_conn().execute(
         'SELECT * FROM alerts WHERE id = ?',
         (int(stale_alert['id']),),
     ).fetchone()

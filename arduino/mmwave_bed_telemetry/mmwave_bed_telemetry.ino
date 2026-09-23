@@ -18,6 +18,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include "tls_ca.h"
 #include <math.h>
 #include <time.h>
 
@@ -53,9 +55,12 @@ const char* API_URL_VALUE = API_URL;
 const char* API_KEY_VALUE = API_KEY;
 
 // These must match what you created in the MelX Health Admin UI.
-const int FACILITY_ID = 1;
-const char* DEVICE_ID = "BHA2-001";
-const char* BED_ID = "a4045022-03c4-4675-8eb1-6e2ede4e19ac";
+#ifndef MELX_FACILITY_ID
+#error "Set MELX_FACILITY_ID, MELX_DEVICE_ID and MELX_BED_ID in secrets.h (see example)."
+#endif
+const int FACILITY_ID = MELX_FACILITY_ID;
+const char* DEVICE_ID = MELX_DEVICE_ID;
+const char* BED_ID = MELX_BED_ID;
 
 static uint32_t lastPostMs = 0;
 static float lastRealRR = 14.0f;
@@ -130,7 +135,7 @@ static float simulateHR(float tSeconds) {
 
 static bool postTelemetry(bool presence, bool fall, float rr, float hr, float confidence,
                           bool simulated, bool rrValid, bool hrValid, float distanceCm, bool distanceValid) {
-  if (WiFi.status() != WL_CONNECTED) return false;
+  if (WiFi.status() != WL_CONNECTED || time(nullptr) < 1700000000) return false;
 
   String json = "{";
   json += "\"device_id\":\"" + String(DEVICE_ID) + "\",";
@@ -139,8 +144,8 @@ static bool postTelemetry(bool presence, bool fall, float rr, float hr, float co
   json += "\"ts\":" + String(nowTs()) + ",";
   json += "\"presence\":" + String(presence ? "true" : "false") + ",";
   json += "\"fall\":" + String(fall ? "true" : "false") + ",";
-  json += "\"rr\":" + String(rr, 2) + ",";
-  json += "\"hr\":" + String(hr, 1) + ",";
+  json += "\"rr\":" + (rrValid ? String(rr, 2) : String("null")) + ",";
+  json += "\"hr\":" + (hrValid ? String(hr, 1) : String("null")) + ",";
   json += "\"confidence\":" + String(confidence, 2) + ",";
   json += "\"firmware\":\"";
 #if USE_MMWAVE
@@ -164,9 +169,11 @@ static bool postTelemetry(bool presence, bool fall, float rr, float hr, float co
   json += "}";
   json += "}";
 
+  WiFiClientSecure secureClient;
+  secureClient.setCACert(MELX_ROOT_CA);
   HTTPClient http;
   http.setTimeout(8000);
-  http.begin(API_URL_VALUE);
+  if (!String(API_URL_VALUE).startsWith("https://") || !http.begin(secureClient, API_URL_VALUE)) return false;
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " + String(API_KEY_VALUE));
 
@@ -199,6 +206,10 @@ void setup() {
 }
 
 void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    wifiConnect();
+    return;
+  }
   bool presence = false;
   bool fall = false;
   bool rrValid = true;
@@ -220,10 +231,10 @@ void loop() {
     rrValid = mmWave.getBreathRate(rrRead);
     hrValid = mmWave.getHeartRate(hrRead);
     if (rrValid) {
-      lastRealRR = clampf(rrRead, 4.0f, 40.0f);
+      lastRealRR = rrRead;
     }
     if (hrValid) {
-      lastRealHR = clampf(hrRead, 35.0f, 180.0f);
+      lastRealHR = hrRead;
     }
     rr = lastRealRR;
     hr = lastRealHR;
@@ -238,14 +249,8 @@ void loop() {
     else if (rrValid || hrValid) confidence = 0.70f;
     else confidence = 0.35f;
   } else {
-    // Keep last known values if no fresh frame arrives.
-    presence = false;
-    fall = false;
-    rr = lastRealRR;
-    hr = lastRealHR;
-    rrValid = false;
-    hrValid = false;
-    confidence = 0.25f;
+    // No frame means unknown occupancy, not an empty bed. Wait for a frame.
+    return;
   }
 #else
   presence = simulatePresence();

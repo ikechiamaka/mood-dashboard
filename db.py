@@ -1,11 +1,30 @@
 import os
 import json
 import sqlite3
+import threading
+from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 DEFAULT_DB_DIR = os.path.join(os.path.dirname(__file__), 'data')
 DEFAULT_DB_PATH = os.path.join(DEFAULT_DB_DIR, 'app.db')
+load_dotenv()
+_connections = threading.local()
+
+
+def production_mode() -> bool:
+    return (os.getenv('FLASK_ENV') or os.getenv('APP_ENV') or os.getenv('ENV') or '').lower() in ('prod', 'production')
+
+
+def demo_enabled() -> bool:
+    return not production_mode() and os.getenv('SEED_DEMO_DATA', '1') == '1'
+
+
+def close_conn():
+    conn = getattr(_connections, 'conn', None)
+    if conn is not None:
+        conn.close()
+        _connections.conn = None
 
 
 def _resolve_db_path() -> str:
@@ -14,27 +33,42 @@ def _resolve_db_path() -> str:
         return override
     return DEFAULT_DB_PATH
 
-_conn: Optional[sqlite3.Connection] = None
-
-
 def get_conn() -> sqlite3.Connection:
-    global _conn
-    if _conn is not None:
-        return _conn
+    conn = getattr(_connections, 'conn', None)
+    if conn is not None:
+        return conn
+    url = os.getenv('DATABASE_URL', '').strip()
+    if url:
+        if not url.startswith(('postgresql://', 'postgres://')):
+            raise RuntimeError('DATABASE_URL must be a PostgreSQL connection URI.')
+        from database_backend import PostgresConnection
+        conn = PostgresConnection(url)
+        _connections.conn = conn
+        return conn
+    if os.getenv('REQUIRE_POSTGRES', '0') == '1':
+        raise RuntimeError('DATABASE_URL is required; refusing to store live data in SQLite.')
     path = _resolve_db_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    _conn = sqlite3.connect(path, check_same_thread=False)
-    _conn.row_factory = sqlite3.Row
-    _conn.execute('PRAGMA foreign_keys = ON')
-    return _conn
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    conn = sqlite3.connect(path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys = ON')
+    _connections.conn = conn
+    return conn
 
 
 def _user_version(conn: sqlite3.Connection) -> int:
+    if not isinstance(conn, sqlite3.Connection):
+        conn.execute('CREATE TABLE IF NOT EXISTS schema_version (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)')
+        row = conn.execute('SELECT version FROM schema_version WHERE id = 1').fetchone()
+        return int(row[0]) if row else 0
     cur = conn.execute('PRAGMA user_version')
     return int(cur.fetchone()[0])
 
 
 def _set_user_version(conn: sqlite3.Connection, v: int) -> None:
+    if not isinstance(conn, sqlite3.Connection):
+        conn.execute('INSERT INTO schema_version (id, version) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET version = excluded.version', (v,))
+        return
     conn.execute(f'PRAGMA user_version = {v}')
 
 
@@ -53,6 +87,15 @@ def init_db() -> None:
         _maybe_import_legacy_logs(conn)
         conn.commit()
     # Future migrations: if v < 2: ...
+
+
+def _column_names(conn, table):
+    if isinstance(conn, sqlite3.Connection):
+        return {row[1] for row in conn.execute(f'PRAGMA table_info({table})').fetchall()}
+    return {row[0] for row in conn.execute(
+        'SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?',
+        (table,),
+    ).fetchall()}
 
 
 def _create_schema_v1(conn: sqlite3.Connection) -> None:
@@ -213,8 +256,7 @@ def _ensure_user_columns(conn: sqlite3.Connection) -> None:
     desired = {
         'avatar_url': 'TEXT',
     }
-    cur = conn.execute('PRAGMA table_info(users)')
-    existing = {row[1] for row in cur.fetchall()}
+    existing = _column_names(conn, 'users')
     for column, ddl in desired.items():
         if column not in existing:
             conn.execute(f'ALTER TABLE users ADD COLUMN {column} {ddl}')
@@ -230,16 +272,14 @@ def _ensure_patient_columns(conn: sqlite3.Connection) -> None:
         'care_focus': 'TEXT',
         'avatar_url': 'TEXT'
     }
-    cur = conn.execute('PRAGMA table_info(patients)')
-    existing = {row[1] for row in cur.fetchall()}
+    existing = _column_names(conn, 'patients')
     for column, ddl in desired.items():
         if column not in existing:
             conn.execute(f'ALTER TABLE patients ADD COLUMN {column} {ddl}')
 
 
 def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    cur = conn.execute(f'PRAGMA table_info({table})')
-    return any(row[1] == column for row in cur.fetchall())
+    return column in _column_names(conn, table)
 
 
 def _ensure_bed_monitoring_schema(conn: sqlite3.Connection) -> None:
@@ -618,6 +658,8 @@ def _ensure_schema_compat(conn: sqlite3.Connection) -> None:
 
 def _maybe_seed_from_env(conn: sqlite3.Connection) -> None:
     """Seed demo data and ensure baseline readings for showcase environments."""
+    if not demo_enabled():
+        return
     cur = conn.execute('SELECT COUNT(1) FROM users')
     users_exist = int(cur.fetchone()[0]) > 0
     if not users_exist:
@@ -1132,7 +1174,7 @@ def db_insert_patient(
     conn = get_conn()
     _ensure_patient_columns(conn)
     resolved_avatar = avatar_url or '/static/pic.jpg'
-    conn.execute(
+    inserted = conn.execute(
         'INSERT INTO patients (name, facility_id, bed_id, age, risk_level, primary_condition, allergies, care_focus, avatar_url) VALUES (?,?,?,?,?,?,?,?,?)',
         (
             name,
@@ -1147,7 +1189,7 @@ def db_insert_patient(
         )
     )
     conn.commit()
-    cur = conn.execute('SELECT * FROM patients WHERE rowid = last_insert_rowid()')
+    cur = conn.execute('SELECT * FROM patients WHERE id = ?', (inserted.lastrowid,))
     return _row_to_dict(cur.fetchone())
 
 
@@ -1208,6 +1250,8 @@ def _table_empty(conn: sqlite3.Connection, table: str) -> bool:
 
 
 def _maybe_import_legacy_logs(conn: sqlite3.Connection) -> None:
+    if not demo_enabled():
+        return
     try:
         if _table_empty(conn, 'checkins'):
             _import_csv_checkins(conn)

@@ -6,11 +6,11 @@
   - Designed for a normal ESP32 dev board.
 
   Default mode:
-  - DUMMY_ENV_MODE=1
-  - Sends simulated values every 30 seconds
+  - DUMMY_ENV_MODE=0
+  - Sends measured values every 30 seconds; missing values are null
   - Requires only WiFi.h and HTTPClient.h
 
-  Future sensor placeholders:
+  Optional sensors (enable only after confirming wiring):
   - DHT22 for temperature/humidity
   - BH1750 for light
   - MQ135 analog air quality
@@ -21,19 +21,21 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include "tls_ca.h"
 #include <math.h>
 #include <time.h>
 
 #include "secrets.h"
 
-#define DUMMY_ENV_MODE 1
+#define DUMMY_ENV_MODE 0
 #define POST_INTERVAL_MS 30000UL
 
 #define USE_DHT22 0
 #define USE_BH1750 0
-#define USE_MQ135 1
-#define USE_PIR 1
-#define USE_NOISE_SENSOR 1
+#define USE_MQ135 0
+#define USE_PIR 0
+#define USE_NOISE_SENSOR 0
 
 // Placeholder pin assignments for a typical ESP32 dev board.
 // Adjust these to match your real wiring when moving beyond dummy mode.
@@ -43,6 +45,16 @@
 #define NOISE_PIN 35
 #define I2C_SDA_PIN 21
 #define I2C_SCL_PIN 22
+
+#if USE_DHT22
+#include <DHT.h>
+DHT dht(DHT22_PIN, DHT22);
+#endif
+#if USE_BH1750
+#include <Wire.h>
+#include <BH1750.h>
+BH1750 lightMeter;
+#endif
 
 const char* WIFI_SSID_VALUE = WIFI_SSID;
 const char* WIFI_PASSWORD_VALUE = WIFI_PASSWORD;
@@ -65,6 +77,10 @@ struct EnvironmentSnapshot {
   int mq135Raw;
   bool motion;
 };
+
+static String jsonNumber(float value, int decimals) {
+  return isfinite(value) ? String(value, decimals) : String("null");
+}
 
 static uint32_t lastPostMs = 0;
 static uint32_t lastWifiAttemptMs = 0;
@@ -154,10 +170,9 @@ static bool readDht22(float& temperatureC, float& humidity) {
   return false;
 #else
   #if USE_DHT22
-    // TODO: integrate your preferred DHT22 library here.
-    (void)temperatureC;
-    (void)humidity;
-    return false;
+    temperatureC = dht.readTemperature();
+    humidity = dht.readHumidity();
+    return isfinite(temperatureC) && isfinite(humidity);
   #else
     (void)temperatureC;
     (void)humidity;
@@ -172,9 +187,8 @@ static bool readBh1750(float& lightLevel) {
   return false;
 #else
   #if USE_BH1750
-    // TODO: integrate BH1750 over I2C here.
-    (void)lightLevel;
-    return false;
+    lightLevel = lightMeter.readLightLevel();
+    return isfinite(lightLevel) && lightLevel >= 0;
   #else
     (void)lightLevel;
     return false;
@@ -241,14 +255,15 @@ static EnvironmentSnapshot readEnvironmentSnapshot() {
   return simulateEnvironment();
 #else
   EnvironmentSnapshot snapshot;
-  snapshot.temperatureC = 24.0f;
-  snapshot.humidity = 60.0f;
-  snapshot.lightLevel = 0.0f;
-  snapshot.noiseLevel = 0.0f;
+  snapshot.temperatureC = NAN;
+  snapshot.humidity = NAN;
+  snapshot.lightLevel = NAN;
+  snapshot.noiseLevel = NAN;
   snapshot.mq135Raw = readMq135Raw();
   snapshot.motion = readPirMotion();
-  snapshot.confidence = 0.70f;
-  snapshot.airQuality = airQualityFromRaw(snapshot.mq135Raw >= 0 ? snapshot.mq135Raw : 900);
+  snapshot.confidence = NAN;
+  // Raw MQ135 ADC counts are not a calibrated air-quality category.
+  snapshot.airQuality = "";
 
   float temp = 0.0f;
   float hum = 0.0f;
@@ -263,9 +278,8 @@ static EnvironmentSnapshot readEnvironmentSnapshot() {
   }
 
   float noise = readNoiseLevel();
-  if (noise >= 0.0f) {
-    snapshot.noiseLevel = noise;
-  }
+  // Analog counts are retained only as raw data until calibrated to dB.
+  (void)noise;
 
   return snapshot;
 #endif
@@ -278,19 +292,20 @@ static String buildEnvironmentPayload(const EnvironmentSnapshot& snapshot) {
   payload += "\"bed_id\":\"" + jsonEscape(String(BED_ID_VALUE)) + "\",";
   payload += "\"event_type\":\"environment\",";
   payload += "\"source\":\"" + String(SOURCE_NAME) + "\",";
-  payload += "\"temperature_c\":" + String(snapshot.temperatureC, 2) + ",";
-  payload += "\"humidity\":" + String(snapshot.humidity, 1) + ",";
+  payload += "\"temperature_c\":" + jsonNumber(snapshot.temperatureC, 2) + ",";
+  payload += "\"humidity\":" + jsonNumber(snapshot.humidity, 1) + ",";
   payload += "\"air_quality\":\"" + jsonEscape(String(snapshot.airQuality)) + "\",";
-  payload += "\"light_level\":" + String(snapshot.lightLevel, 1) + ",";
-  payload += "\"noise_level\":" + String(snapshot.noiseLevel, 1) + ",";
-  payload += "\"confidence\":" + String(snapshot.confidence, 2) + ",";
+  payload += "\"light_level\":" + jsonNumber(snapshot.lightLevel, 1) + ",";
+  payload += "\"noise_level\":" + jsonNumber(snapshot.noiseLevel, 1) + ",";
+  payload += "\"confidence\":" + jsonNumber(snapshot.confidence, 2) + ",";
   payload += "\"raw\":{";
   payload += "\"firmware\":\"" + String(FIRMWARE_NAME) + "\",";
   payload += "\"ts_epoch\":" + String(nowTs()) + ",";
   payload += "\"wifi_rssi\":" + String(WiFi.RSSI()) + ",";
   payload += "\"ip\":\"" + jsonEscape(ipText()) + "\",";
   payload += "\"mq135_raw\":" + String(snapshot.mq135Raw) + ",";
-  payload += "\"motion\":" + String(snapshot.motion ? "true" : "false") + ",";
+  payload += "\"noise_adc_raw\":" + jsonNumber(readNoiseLevel(), 0) + ",";
+  payload += "\"motion\":" + String((DUMMY_ENV_MODE || USE_PIR) ? (snapshot.motion ? "true" : "false") : "null") + ",";
   payload += "\"dummy_env_mode\":" + String(DUMMY_ENV_MODE ? "true" : "false");
   payload += "}}";
   return payload;
@@ -308,10 +323,13 @@ static bool postEnvironment(const EnvironmentSnapshot& snapshot) {
   Serial.println("POST " + url);
   Serial.println(payload);
 
+  if (time(nullptr) < 1700000000) return false;
+  WiFiClientSecure secureClient;
+  secureClient.setCACert(MELX_ROOT_CA);
   HTTPClient http;
   http.setTimeout(8000);
 
-  if (!http.begin(url)) {
+  if (!url.startsWith("https://") || !http.begin(secureClient, url)) {
     Serial.println("HTTP begin failed");
     return false;
   }
@@ -338,6 +356,13 @@ void setup() {
   Serial.printf("BASE_URL=%s\n", SERVER_BASE_URL_VALUE);
 
   pinMode(PIR_PIN, INPUT);
+#if USE_DHT22
+  dht.begin();
+#endif
+#if USE_BH1750
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
+#endif
   wifiConnect();
 }
 

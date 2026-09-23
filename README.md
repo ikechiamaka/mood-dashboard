@@ -84,16 +84,24 @@ Install dev deps (already in `requirements.txt`) then you can add PyTest tests u
 
 ## DigitalOcean Deployment
 
+For the production database migration, real administrator setup, device
+configuration and pilot acceptance checks, follow [Live Data Setup](docs/LIVE_DATA_SETUP.md).
+Use `.env.production.example` for a clean PostgreSQL-backed deployment.
+
 This app can run on DigitalOcean App Platform as a Python web service.
 
-Required environment variables:
+Production environment variables (see the linked setup guide for the certificate path):
 ```
 FLASK_SECRET_KEY=use_a_long_random_secret
+APP_ENV=production
+DATABASE_URL=your_managed_postgresql_uri_with_verified_TLS
+REQUIRE_POSTGRES=1
+SEED_DEMO_DATA=0
 CHATBOT_PROVIDER=local
 CHATBOT_LOCAL_ONLY=1
 CHATBOT_NO_PHI=1
-MELX_HEALTH_DB_PATH=/workspace/data/app.db
 DISABLE_ALERT_MONITOR=1
+ENABLE_ALERT_MONITOR=0
 ```
 
 App Platform run command:
@@ -101,7 +109,7 @@ App Platform run command:
 gunicorn --workers 1 --threads 4 --bind 0.0.0.0:$PORT wsgi:app
 ```
 
-For production patient/device data, prefer a Droplet with a persistent disk or migrate the app from SQLite to Postgres. App Platform rebuilds/redeploys can replace the local filesystem, so SQLite on App Platform is best treated as a demo setup unless you attach persistent storage and keep the service to a single instance.
+Use Managed PostgreSQL for production data. App Platform local storage is ephemeral and does not support persistent volume mounts. SQLite remains available for local development when DATABASE_URL is unset and REQUIRE_POSTGRES=0. Enable alerts only after the pilot's recipients, shifts and delivery are verified.
 
 ## Next Steps (Suggested)
 - Replace demo auth with real user model + hashed passwords

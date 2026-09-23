@@ -9,3 +9,6 @@ joblib>=1.2.0
 python-dotenv>=1.0.0
 pytest>=7.4.0
 twilio>=9.0.0
+psycopg[binary]>=3.2,<4
+sqlparams>=6,<7
+sqlparse>=0.5,<1

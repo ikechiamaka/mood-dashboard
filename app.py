@@ -29,6 +29,9 @@ from users import (
     db_update_user,
 )
 from db import (
+    close_conn,
+    demo_enabled,
+    production_mode,
     init_db,
     db_list_staff,
     db_insert_staff,
@@ -108,6 +111,12 @@ from typing import Any, Dict, Optional, List
 load_dotenv()
 
 app = Flask(__name__)
+
+
+@app.teardown_appcontext
+def release_database_connection(error=None):
+    close_conn()
+
 raw_secret = os.getenv('FLASK_SECRET_KEY')
 env_name = (os.getenv('FLASK_ENV') or os.getenv('APP_ENV') or os.getenv('ENV') or '').lower()
 if not raw_secret:
@@ -629,6 +638,8 @@ def _compute_health_scores(df: pd.DataFrame) -> Dict[str, float]:
 
 
 def _seed_demo_logs_if_needed():
+    if not demo_enabled():
+        return
     try:
         patients = db_list_patients()
     except Exception:
@@ -2102,6 +2113,8 @@ def patients_list():
 
 @app.route('/api/patients/seed_demo', methods=['POST'])
 def patients_seed_demo():
+    if not demo_enabled():
+        return jsonify({'error': 'Demo data is disabled'}), 403
     if 'user' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
     if session.get('role') not in ('super_admin', 'facility_admin'):
@@ -2231,21 +2244,21 @@ def _load_sensor_dataframe(patient_id: int | None = None) -> pd.DataFrame:
         sql = f"""
             SELECT 
               timestamp as timestamp,
-              temperature as Temperature,
-              humidity as Humidity,
-              mq2 as MQ2,
-              bh1750fvi as BH1750FVI,
-              radar as Radar,
-              ultrasonic as Ultrasonic,
+              temperature as "Temperature",
+              humidity as "Humidity",
+              mq2 as "MQ2",
+              bh1750fvi as "BH1750FVI",
+              radar as "Radar",
+              ultrasonic as "Ultrasonic",
               mood as mood,
               song as song
             FROM readings
             {where}
         """
-        df = pd.read_sql_query(sql, conn, params=params) if conn else pd.DataFrame()
+        df = pd.DataFrame([dict(row) for row in conn.execute(sql, tuple(params)).fetchall()]) if conn else pd.DataFrame()
     except Exception:
         df = pd.DataFrame()
-    if df.empty:
+    if df.empty and demo_enabled():
         csv_files = glob.glob(os.path.join('data', 'sensor_data_*.csv'))
         frames = []
         for f in csv_files:
@@ -2566,6 +2579,13 @@ def ingest_telemetry():
     payload = _parse_device_json_payload()
     if payload is None:
         return jsonify({'error': 'invalid JSON payload'}), 400
+    raw = payload.get('raw')
+    if production_mode() and isinstance(raw, dict) and _normalize_bool_int(raw.get('simulated')) == 1:
+        return jsonify({'error': 'Simulated telemetry is disabled in production'}), 400
+    if isinstance(raw, dict):
+        for value, valid in (('rr', 'rr_valid'), ('hr', 'hr_valid')):
+            if valid in raw and _normalize_bool_int(raw[valid]) == 0:
+                payload[value] = None
     device_ctx, error = _device_request_context(payload, endpoint_key='telemetry')
     if error is not None:
         return error
@@ -2586,7 +2606,7 @@ def ingest_telemetry():
     rr = _coerce_float(payload.get('rr'), low=0.0, high=120.0)
     hr = _coerce_float(payload.get('hr'), low=0.0, high=260.0)
     confidence = _coerce_float(payload.get('confidence'), low=0.0, high=1.0)
-    if os.getenv('SIMULATE_VITALS', '0') == '1':
+    if not production_mode() and os.getenv('SIMULATE_VITALS', '0') == '1':
         rr = rr if rr is not None else _coerce_float(payload.get('rr_sim'), low=0.0, high=120.0)
         hr = hr if hr is not None else _coerce_float(payload.get('hr_sim'), low=0.0, high=260.0)
 
@@ -2634,6 +2654,9 @@ def ingest_wall_event():
     payload = _parse_device_json_payload()
     if payload is None:
         return jsonify({'error': 'invalid JSON payload'}), 400
+    raw = payload.get('raw')
+    if production_mode() and isinstance(raw, dict) and _normalize_bool_int(raw.get('dummy_env_mode')) == 1:
+        return jsonify({'error': 'Simulated environment data is disabled in production'}), 400
 
     device_ctx, error = _device_request_context(
         payload,
@@ -3644,6 +3667,8 @@ def _send_sms(to_number: str, body: str) -> tuple[bool, Dict[str, Any]]:
     if ok:
         app.logger.info(f"Twilio SMS sent to {to_number}")
         return True, meta
+    if production_mode():
+        return False, {'provider': 'none', 'reason': 'SMS delivery not configured or failed', 'fallback': meta}
     app.logger.info(f"[SMS MOCK] To {to_number}: {body}")
     return True, {'provider': 'mock', 'note': 'No SMS provider configured', 'fallback': meta}
 
@@ -3964,6 +3989,8 @@ def _alert_monitor_loop():
             _alert_monitor_cycle()
         except Exception as exc:
             app.logger.error(f"Alert monitor error: {exc}")
+        finally:
+            close_conn()
         time.sleep(poll_sec)
 
 

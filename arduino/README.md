@@ -81,5 +81,7 @@ Each device receives its own bearer API key. The backend stores only the hash, s
 ## General Rules
 
 - Do not use `localhost` in firmware config when testing against the Flask app on another machine.
-- Use the Flask server's reachable LAN IP in `SERVER_BASE_URL` or `API_URL`.
+- Production firmware requires HTTPS. Use `https://www.melxhealth.com` for `SERVER_BASE_URL`, or append `/api/v1/telemetry` for the bed sensor's `API_URL`. Confirm the CA chain before flashing.
 - Keep each firmware target in its own folder with its own `secrets.h`.
+
+See [Live Data Setup](../docs/LIVE_DATA_SETUP.md) for database setup and physical pilot checks.

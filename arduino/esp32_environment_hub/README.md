@@ -30,19 +30,19 @@ Suggested device ID:
 
 The sketch defaults to:
 
-- `DUMMY_ENV_MODE=1`
+- `DUMMY_ENV_MODE=0`
 
-That means it sends simulated temperature, humidity, air quality, light, and noise values every 30 seconds without requiring any external sensor libraries.
+It sends measured values every 30 seconds. Optional sensors are disabled until wiring is confirmed; missing measurements are null. DHT22 and BH1750 integrations require their libraries and the corresponding USE flag. MQ135 and microphone ADC values are raw, uncalibrated values, not air-quality categories or decibels.
 
-This is useful for:
+Simulation may be enabled explicitly for local testing only, with `DUMMY_ENV_MODE=1`. It is useful for:
 
 - backend integration testing
 - dashboard UI testing
 - verifying device auth and room mapping before hardware wiring is complete
 
-## Planned Sensor Placeholders
+## Optional Sensors
 
-The sketch includes config switches and placeholders for:
+The sketch includes config switches for:
 
 - DHT22 for temperature and humidity
 - BH1750 for light level
@@ -63,8 +63,8 @@ Example payload:
 ```json
 {
   "device_id": "ENV-001",
-  "facility_id": "FAC123",
-  "bed_id": "BED-01",
+  "facility_id": "1",
+  "bed_id": "PASTE_ACTUAL_BED_ID",
   "event_type": "environment",
   "source": "esp32_environment_hub",
   "temperature_c": 24.3,
@@ -89,7 +89,7 @@ Example payload:
 1. Create the device in MelX Health admin.
 2. Assign it to the correct facility and bed.
 3. Copy the revealed API key into `secrets.h`.
-4. Set the Flask server LAN IP in `SERVER_BASE_URL`.
+4. Set `SERVER_BASE_URL` to `https://www.melxhealth.com` and confirm the certificate authority in `tls_ca.h`.
 5. Upload to a normal ESP32 board.
 6. Open Serial Monitor at `115200`.
 
@@ -102,5 +102,5 @@ The sketch prints:
 ## Notes
 
 - Do not use `localhost` for `SERVER_BASE_URL`.
-- Use your Flask server's reachable LAN IP.
+- The production sketch requires HTTPS, certificate verification and NTP synchronization.
 - If the board prints `HTTP code: -1`, check Wi-Fi, host IP, and firewall reachability first.

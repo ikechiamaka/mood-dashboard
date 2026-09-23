@@ -18,14 +18,14 @@ Before upload:
 2. Set WIFI_SSID and WIFI_PASSWORD.
 3. Set SERVER_BASE_URL.
    Example:
-   http://192.168.1.50:5000
+   https://www.melxhealth.com
 4. Set WALL_API_KEY to the wall_unit device API key from the MelX Health backend.
 5. Set WALL_DEVICE_ID, FACILITY_ID, and BED_ID to match the dashboard device assignment.
 
 Important:
 - Use a 2.4GHz Wi-Fi network.
-- For local testing, do not use localhost in SERVER_BASE_URL. Use your computer/server IP address.
-- Make sure Windows Firewall allows inbound traffic to the Flask port, usually 5000.
+- The production sketch requires HTTPS, the matching CA in tls_ca.h, and NTP time synchronization.
+- See docs/LIVE_DATA_SETUP.md for the production setup sequence.
 - The device must exist in the MelX Health devices table and be assigned to the same facility_id and bed_id.
 
 Expected backend response:

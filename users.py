@@ -1,6 +1,6 @@
-"""User management utilities with role support (SQLite-backed).
+"""User management utilities with role support.
 
-Backed by a SQLite DB (`data/app.db`) for demo purposes.
+Uses PostgreSQL when DATABASE_URL is set; SQLite supports local development.
 Fields per user:
   - email (str, unique)
   - password_hash (str)
@@ -10,7 +10,6 @@ Fields per user:
   - assigned_patient_ids (list[int], optional)
   - avatar_url (str, optional)
 
-Switch to a real DB server later if needed; the interface keeps that easy.
 """
 from __future__ import annotations
 
